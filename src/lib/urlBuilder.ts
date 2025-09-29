@@ -26,7 +26,16 @@ class URLBuilder {
     try {
       const url = new URL(this.normalizeRetailerUrl(validatedInput.productUrl));
       
-      // Get CashKaro parameters for this retailer
+      const hostname = url.hostname.toLowerCase();
+      // Special handling for Amazon: return clean canonical product URL without any query params
+      if (hostname.includes('amazon')) {
+        url.search = '';
+        url.hash = '';
+        url.pathname = this.canonicalizeAmazonPath(url.pathname);
+        return url.toString();
+      }
+      
+      // For other retailers, attach CashKaro params then clean
       const cashKaroParams = await this.getCashKaroParams(retailer);
       
       // Add CashKaro parameters to URL
@@ -129,11 +138,17 @@ class URLBuilder {
    */
   normalizeRetailerUrl(url: string): string {
     try {
-      const urlObj = new URL(url);
+      // Strip trailing punctuation sometimes introduced by markdown/link formatting
+      const sanitized = url.trim().replace(/[)\]\. ,]+$/g, '');
+      const urlObj = new URL(sanitized);
       
       // Amazon normalization
       if (urlObj.hostname.includes('amazon')) {
         urlObj.hostname = 'www.amazon.in';
+        // Ensure clean canonical product path, no query/hash
+        urlObj.search = '';
+        urlObj.hash = '';
+        urlObj.pathname = this.canonicalizeAmazonPath(urlObj.pathname);
       }
       
       // Flipkart normalization
@@ -164,6 +179,27 @@ class URLBuilder {
       return urlObj.toString();
     } catch {
       return url;
+    }
+  }
+
+  /**
+   * Canonicalize Amazon product path to /dp/ASIN
+   */
+  private canonicalizeAmazonPath(pathname: string): string {
+    try {
+      // Handle /dp/ASIN or /gp/product/ASIN
+      const match = pathname.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/i);
+      if (match) {
+        return `/dp/${match[1].toUpperCase()}`;
+      }
+      // Also handle cases with trailing ')' or extra segments
+      const asinMatch = pathname.match(/\/([A-Z0-9]{10})(?:[/?).]|$)/i);
+      if (asinMatch) {
+        return `/dp/${asinMatch[1].toUpperCase()}`;
+      }
+      return pathname.replace(/[)]+$/, '');
+    } catch {
+      return pathname;
     }
   }
 }
