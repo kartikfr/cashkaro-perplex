@@ -231,8 +231,15 @@ function cleanTitle(title: string): string {
 function cleanUrl(url: string): string {
   try {
     const urlObj = new URL(url);
-    // Remove tracking parameters but keep essential ones
-    const keepParams = ['dp', 'pid', 'id', 'productId'];
+    
+    // For Amazon, keep only the path (contains /dp/PRODUCTID) and remove all query params
+    if (urlObj.hostname.includes('amazon')) {
+      urlObj.search = '';
+      return urlObj.toString();
+    }
+    
+    // For other retailers, keep essential params
+    const keepParams = ['pid', 'id', 'productId'];
     const newSearchParams = new URLSearchParams();
     
     keepParams.forEach(param => {
