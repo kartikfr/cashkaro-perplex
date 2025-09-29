@@ -1,12 +1,32 @@
-import React from 'react';
-import Header from '@/components/Header';
+import React, { useState, useEffect } from 'react';
+import HeaderWithSettings from '@/components/HeaderWithSettings';
 import HeroSection from '@/components/HeroSection';
 import SearchInterface from '@/components/SearchInterface';
+import SearchService from '@/lib/searchService';
+import { API_CONFIG } from '@/lib/config';
 
 const Index = () => {
+  const [searchService, setSearchService] = useState<SearchService | null>(null);
+
+  // Initialize search service with default API key
+  useEffect(() => {
+    if (API_CONFIG.PERPLEXITY_API_KEY) {
+      setSearchService(new SearchService(API_CONFIG.PERPLEXITY_API_KEY));
+    }
+  }, []);
+
+  const handleApiKeyUpdate = (apiKey: string) => {
+    if (apiKey.trim()) {
+      setSearchService(new SearchService(apiKey));
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
-      <Header />
+      <HeaderWithSettings 
+        searchService={searchService} 
+        onApiKeyUpdate={handleApiKeyUpdate}
+      />
       <HeroSection />
       
       {/* Search Section */}

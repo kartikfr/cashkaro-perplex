@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import Perplexity from '@perplexity-ai/perplexity_ai';
 
 // Input validation schema
 const searchQuerySchema = z.object({
@@ -24,18 +25,8 @@ export interface SearchResult {
   timestamp: number;
 }
 
-interface PerplexityResponse {
-  choices: Array<{
-    message: {
-      content: string;
-    };
-  }>;
-  citations?: string[];
-}
-
 class SearchService {
-  private apiKey: string;
-  private baseUrl = 'https://api.perplexity.ai/chat/completions';
+  private client: Perplexity;
   
   private retailerDomains = {
     amazon: 'amazon.in',
@@ -45,7 +36,9 @@ class SearchService {
   };
 
   constructor(apiKey: string) {
-    this.apiKey = apiKey;
+    this.client = new Perplexity({
+      apiKey: apiKey
+    });
   }
 
   async search(query: string, retailer: string = 'all', limit: number = 5): Promise<SearchResult[]> {
@@ -55,46 +48,37 @@ class SearchService {
     try {
       const searchPrompt = this.buildSearchPrompt(validatedInput.query, validatedInput.retailer);
       
-      const response = await fetch(this.baseUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'llama-3.1-sonar-small-128k-online',
-          messages: [
-            {
-              role: 'system',
-              content: 'You are a product search assistant. Return product information in a structured format with title, URL, price (if available), and brief description. Focus on Indian e-commerce sites.'
-            },
-            {
-              role: 'user',
-              content: searchPrompt
-            }
-          ],
-          temperature: 0.2,
-          top_p: 0.9,
-          max_tokens: 1000,
-          return_images: false,
-          return_related_questions: false,
-          search_domain_filter: this.getDomainFilter(validatedInput.retailer),
-          search_recency_filter: 'month',
-          frequency_penalty: 1,
-          presence_penalty: 0
-        }),
+      const response = await this.client.chat.completions.create({
+        model: 'sonar', // Using the correct Perplexity model name
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a product search assistant. Return product information in a structured format with title, URL, price (if available), and brief description. Focus on Indian e-commerce sites. Format your response as a clear list with each product on separate lines.'
+          },
+          {
+            role: 'user',
+            content: searchPrompt
+          }
+        ],
+        temperature: 0.2,
+        top_p: 0.9,
+        max_tokens: 1000,
+        search_domain_filter: this.getDomainFilter(validatedInput.retailer),
+        search_recency_filter: 'month',
+        return_images: false,
+        return_related_questions: false,
+        frequency_penalty: 1,
+        presence_penalty: 0
       });
 
-      if (!response.ok) {
-        throw new Error(`Perplexity API error: ${response.status} - ${response.statusText}`);
-      }
-
-      const data: PerplexityResponse = await response.json();
-      return this.parseSearchResults(data, validatedInput.retailer, validatedInput.limit);
+      return this.parseSearchResults(response, validatedInput.retailer, validatedInput.limit);
       
     } catch (error) {
       console.error('Search error:', error);
-      throw new Error(error instanceof Error ? error.message : 'Search failed');
+      if (error instanceof Error) {
+        throw new Error(`Search failed: ${error.message}`);
+      }
+      throw new Error('Search failed with unknown error');
     }
   }
 
@@ -118,12 +102,27 @@ class SearchService {
     return domain ? [domain] : Object.values(this.retailerDomains);
   }
 
-  private parseSearchResults(data: PerplexityResponse, retailer: string, limit: number): SearchResult[] {
-    if (!data.choices || data.choices.length === 0) {
+  private parseSearchResults(response: any, retailer: string, limit: number): SearchResult[] {
+    if (!response.choices || response.choices.length === 0) {
       return [];
     }
 
-    const content = data.choices[0].message.content;
+    const choice = response.choices[0];
+    let content: string;
+    
+    // Handle both string and array content types from Perplexity SDK
+    if (typeof choice.message.content === 'string') {
+      content = choice.message.content;
+    } else if (Array.isArray(choice.message.content)) {
+      // Extract text from content array
+      content = choice.message.content
+        .filter((item: any) => item.type === 'text')
+        .map((item: any) => item.text || '')
+        .join('\n');
+    } else {
+      content = String(choice.message.content);
+    }
+
     const results: SearchResult[] = [];
     
     try {

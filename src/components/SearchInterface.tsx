@@ -8,9 +8,10 @@ import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
 import SearchService, { SearchResult } from '@/lib/searchService';
 import URLBuilder from '@/lib/urlBuilder';
+import { API_CONFIG } from '@/lib/config';
 
-// Default API key (in production, this should be from environment or user input)
-const DEFAULT_API_KEY = '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';
+// Use the configured API key
+const DEFAULT_API_KEY = API_CONFIG.PERPLEXITY_API_KEY;
 
 interface Retailer {
   id: string;
@@ -33,7 +34,7 @@ const SearchInterface: React.FC = () => {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
+  const [apiKey, setApiKey] = useState(DEFAULT_API_KEY as string);
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
   const [searchService, setSearchService] = useState<SearchService | null>(null);
   const [urlBuilder] = useState(new URLBuilder());
