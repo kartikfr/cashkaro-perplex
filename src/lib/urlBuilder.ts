@@ -124,6 +124,9 @@ class URLBuilder {
    */
   validateCKParams(url: string, retailer: string): boolean {
     try {
+      // Amazon is intentionally parameter-free; treat as valid
+      if (retailer.toLowerCase().includes('amazon')) return true;
+
       const urlObj = new URL(url);
       const cashKaroParams = ['cashkaro_id', 'source_id', 'tracking_id'];
       
