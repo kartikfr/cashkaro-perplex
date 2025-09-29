@@ -1,22 +1,16 @@
-import React, { useState, useEffect } from 'react';
-import { Search, ShoppingCart, Zap, Star } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Search, ShoppingCart, Zap, Star, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
+import SearchService, { SearchResult } from '@/lib/searchService';
+import URLBuilder from '@/lib/urlBuilder';
 
-interface SearchResult {
-  id: string;
-  title: string;
-  url: string;
-  snippet?: string;
-  price?: string;
-  image?: string;
-  retailer: string;
-  timestamp: number;
-}
+// Default API key (in production, this should be from environment or user input)
+const DEFAULT_API_KEY = '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';
 
 interface Retailer {
   id: string;
@@ -33,69 +27,61 @@ const RETAILERS: Retailer[] = [
   { id: 'ajio', name: 'AJIO', domain: 'ajio.com', color: 'bg-yellow-500' },
 ];
 
-const SAMPLE_RESULTS: SearchResult[] = [
-  {
-    id: '1',
-    title: 'Premium Cotton Double Bed Blanket - Soft & Warm Winter Collection',
-    url: 'https://amazon.in/dp/B08X123',
-    snippet: 'Ultra-soft cotton blend blanket perfect for winter. Machine washable and lightweight.',
-    price: '₹399',
-    retailer: 'amazon',
-    timestamp: Date.now(),
-  },
-  {
-    id: '2',
-    title: 'Cozy Fleece Blanket Single Bed Size - Multiple Colors Available',
-    url: 'https://flipkart.com/product/xyz',
-    snippet: 'Comfortable fleece material that retains warmth. Available in 8 different colors.',
-    price: '₹299',
-    retailer: 'flipkart',
-    timestamp: Date.now(),
-  },
-  {
-    id: '3',
-    title: 'Luxe Microfiber Throw Blanket - Premium Quality Home Decor',
-    url: 'https://myntra.com/item/abc',
-    snippet: 'Decorative throw blanket made from premium microfiber. Perfect for living rooms.',
-    price: '₹450',
-    retailer: 'myntra',
-    timestamp: Date.now(),
-  },
-];
-
 const SearchInterface: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRetailer, setSelectedRetailer] = useState('all');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [apiKey, setApiKey] = useState('');
-  const [showApiKeyInput, setShowApiKeyInput] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
+  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
+  const [searchService, setSearchService] = useState<SearchService | null>(null);
+  const [urlBuilder] = useState(new URLBuilder());
   const { toast } = useToast();
 
-  // Simulated search function - replace with actual Perplexity API call
+  // Initialize search service when API key changes
+  useEffect(() => {
+    if (apiKey.trim()) {
+      setSearchService(new SearchService(apiKey));
+      setShowApiKeyInput(false);
+    }
+  }, [apiKey]);
+
+  // Debounced search function
+  const debouncedSearch = useCallback(
+    debounce((query: string, retailer: string) => {
+      if (query.trim() && searchService) {
+        performSearch(query, retailer);
+      }
+    }, 300),
+    [searchService]
+  );
+
+  // Real search function using Perplexity API
   const performSearch = async (query: string, retailer: string) => {
+    if (!searchService) {
+      setError('Search service not initialized');
+      return;
+    }
+
     setIsLoading(true);
+    setError(null);
     
     try {
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Filter sample results based on retailer
-      let filteredResults = SAMPLE_RESULTS;
-      if (retailer !== 'all') {
-        filteredResults = SAMPLE_RESULTS.filter(result => result.retailer === retailer);
-      }
-      
-      setResults(filteredResults);
+      const searchResults = await searchService.search(query, retailer, 5);
+      setResults(searchResults);
       
       toast({
         title: "Search Complete",
-        description: `Found ${filteredResults.length} products`,
+        description: `Found ${searchResults.length} products`,
       });
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Search failed';
+      setError(errorMessage);
+      
       toast({
         title: "Search Failed",
-        description: "Could not fetch results. Please try again.",
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {
@@ -103,46 +89,64 @@ const SearchInterface: React.FC = () => {
     }
   };
 
-  // Simulate CashKaro redirect
+  // Handle product click with CashKaro URL building
   const handleProductClick = async (result: SearchResult) => {
-    toast({
-      title: "Redirecting with CashKaro",
-      description: `Opening ${result.title} with cashback tracking...`,
-    });
-    
-    // Simulate the URL building process from your PRD
-    const cashkaroParams = getCashkaroParams(result.retailer);
-    const finalUrl = buildFinalUrl(result.url, cashkaroParams);
-    
-    // Open in new tab
-    window.open(finalUrl, '_blank');
+    try {
+      // Build final URL with CashKaro parameters
+      const finalUrl = urlBuilder.buildFinalUrl(result.url, result.retailer);
+      
+      // Validate CashKaro parameters were added
+      const isValid = urlBuilder.validateCKParams(finalUrl, result.retailer);
+      
+      if (isValid) {
+        toast({
+          title: "Redirecting with CashKaro",
+          description: `Opening ${result.title} with cashback tracking...`,
+        });
+      } else {
+        toast({
+          title: "Redirecting",
+          description: `Opening ${result.title} (cashback params may not be available)...`,
+          variant: "destructive",
+        });
+      }
+      
+      // Open in new tab
+      window.open(finalUrl, '_blank');
+      
+    } catch (error) {
+      console.error('Error building URL:', error);
+      // Fallback to original URL
+      window.open(result.url, '_blank');
+      
+      toast({
+        title: "Redirecting",
+        description: "Opened product page (fallback mode)",
+        variant: "destructive",
+      });
+    }
   };
 
-  const getCashkaroParams = (retailer: string) => {
-    const paramMap: Record<string, Record<string, string>> = {
-      amazon: { tag: 'cashkacom-21', ascsubtag: 'CKXYZ123' },
-      flipkart: { affid: 'cashkaro', affExtParam1: 'ck001' },
-      myntra: { utm_source: 'cashkaro', utm_medium: 'affiliate', utm_campaign: 'ck2024' },
-      ajio: { source: 'cashkaro', affid: 'ck_ajio', subid: 'ck123' },
-    };
-    
-    return paramMap[retailer] || {};
-  };
-
-  const buildFinalUrl = (productUrl: string, ckParams: Record<string, string>) => {
-    const url = new URL(productUrl);
-    
-    // Add CashKaro parameters
-    Object.entries(ckParams).forEach(([key, value]) => {
-      url.searchParams.set(key, value);
-    });
-    
-    return url.toString();
-  };
-
+  // Handle search with debouncing
   const handleSearch = () => {
-    if (searchQuery.trim()) {
+    if (searchQuery.trim() && searchService) {
       performSearch(searchQuery, selectedRetailer);
+    }
+  };
+
+  // Handle search input change with debouncing
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value);
+    if (value.trim().length > 2) {
+      debouncedSearch(value, selectedRetailer);
+    }
+  };
+
+  // Handle retailer change
+  const handleRetailerChange = (retailer: string) => {
+    setSelectedRetailer(retailer);
+    if (searchQuery.trim() && searchService) {
+      debouncedSearch(searchQuery, retailer);
     }
   };
 
@@ -153,16 +157,16 @@ const SearchInterface: React.FC = () => {
 
   return (
     <div className="w-full max-w-4xl mx-auto space-y-6">
-      {/* API Key Input */}
+      {/* API Key Input - Only show if needed */}
       {showApiKeyInput && (
         <Card className="p-6 bg-accent/50 border-primary/20">
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <Zap className="w-5 h-5 text-primary" />
-              <h3 className="font-semibold">Perplexity API Configuration</h3>
+              <h3 className="font-semibold">Configure Perplexity API</h3>
             </div>
             <p className="text-sm text-muted-foreground">
-              Enter your Perplexity API key to enable live product search across retailers.
+              Update your Perplexity API key for enhanced search capabilities.
             </p>
             <div className="flex gap-3">
               <Input
@@ -176,7 +180,7 @@ const SearchInterface: React.FC = () => {
                 onClick={() => setShowApiKeyInput(false)}
                 disabled={!apiKey.trim()}
               >
-                Configure
+                Update
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
@@ -199,17 +203,17 @@ const SearchInterface: React.FC = () => {
               type="text"
               placeholder="Try: Blanket under 500, iPhone 15, Nike shoes..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => handleSearchChange(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
               className="pl-10 h-12 text-base"
             />
             <Button 
               onClick={handleSearch}
-              disabled={isLoading || !searchQuery.trim()}
+              disabled={isLoading || !searchQuery.trim() || !searchService}
               className="absolute right-2 top-1/2 transform -translate-y-1/2"
               size="sm"
             >
-              Search
+              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Search'}
             </Button>
           </div>
 
@@ -220,8 +224,9 @@ const SearchInterface: React.FC = () => {
                 key={retailer.id}
                 variant={selectedRetailer === retailer.id ? "default" : "retailer"}
                 size="sm"
-                onClick={() => setSelectedRetailer(retailer.id)}
+                onClick={() => handleRetailerChange(retailer.id)}
                 className="transition-smooth"
+                disabled={isLoading}
               >
                 <ShoppingCart className="w-4 h-4" />
                 {retailer.name}
@@ -230,6 +235,16 @@ const SearchInterface: React.FC = () => {
           </div>
         </div>
       </Card>
+
+      {/* Error Display */}
+      {error && (
+        <Card className="p-4 bg-destructive/10 border-destructive/20">
+          <div className="flex items-center gap-2 text-destructive">
+            <AlertCircle className="w-4 h-4" />
+            <p className="text-sm font-medium">{error}</p>
+          </div>
+        </Card>
+      )}
 
       {/* Results Section */}
       {(results.length > 0 || isLoading) && (
@@ -305,6 +320,26 @@ const SearchInterface: React.FC = () => {
         </div>
       )}
 
+      {/* Settings Toggle */}
+      <Card className="p-4 bg-muted/30">
+        <div className="flex items-center justify-between">
+          <div className="space-y-1">
+            <h3 className="font-medium">API Configuration</h3>
+            <p className="text-sm text-muted-foreground">
+              {searchService ? 'Perplexity API configured' : 'API not configured'}
+            </p>
+          </div>
+          <Button 
+            variant="outline" 
+            size="sm"
+            onClick={() => setShowApiKeyInput(!showApiKeyInput)}
+          >
+            <Zap className="w-4 h-4" />
+            {showApiKeyInput ? 'Hide' : 'Configure'}
+          </Button>
+        </div>
+      </Card>
+
       {/* Info Section */}
       <Card className="p-6 bg-primary/5 border-primary/20">
         <div className="space-y-3">
@@ -313,7 +348,7 @@ const SearchInterface: React.FC = () => {
             <h3 className="font-semibold">How It Works</h3>
           </div>
           <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
-            <li>Search for products across major Indian retailers</li>
+            <li>Search for products across major Indian retailers using Perplexity AI</li>
             <li>Click any result to automatically get CashKaro cashback tracking</li>
             <li>Shop normally and earn cashback without extra steps</li>
           </ol>
@@ -322,5 +357,18 @@ const SearchInterface: React.FC = () => {
     </div>
   );
 };
+
+// Debounce utility function
+function debounce<T extends (...args: any[]) => any>(
+  func: T,
+  wait: number
+): (...args: Parameters<T>) => void {
+  let timeout: NodeJS.Timeout;
+  
+  return (...args: Parameters<T>) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
+}
 
 export default SearchInterface;
