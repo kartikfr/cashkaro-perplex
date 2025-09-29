@@ -16,7 +16,7 @@ interface CashKaroAuthStatus {
 
 export const CashKaroStatus: React.FC = () => {
   const [authStatus, setAuthStatus] = useState<CashKaroAuthStatus | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true); // Start with loading true
   const { toast } = useToast();
 
   const checkAuthStatus = async () => {
@@ -107,16 +107,40 @@ export const CashKaroStatus: React.FC = () => {
     );
   };
 
+  const getConnectionMessage = () => {
+    if (authStatus?.isSignedIn) {
+      return {
+        title: "CashKaro Connected ✓",
+        subtitle: authStatus.userInfo?.name || "You're signed in to CashKaro",
+        action: "Your purchases will earn cashback automatically"
+      };
+    }
+    return {
+      title: "CashKaro Not Connected",
+      subtitle: "Sign in to CashKaro to earn cashback",
+      action: "Click to sign in and start earning"
+    };
+  };
+
+  const message = getConnectionMessage();
+
   return (
-    <div className="flex items-center gap-2">
-      {getStatusBadge()}
+    <div className="flex items-center gap-3">
+      {/* Main Status Display */}
+      <div className="flex items-center gap-2">
+        {getStatusBadge()}
+        
+        <div className="hidden sm:flex flex-col">
+          <span className={`text-xs font-medium ${authStatus?.isSignedIn ? 'text-green-600' : 'text-destructive'}`}>
+            {message.title}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {message.subtitle}
+          </span>
+        </div>
+      </div>
       
-      {authStatus?.userInfo?.name && (
-        <span className="text-sm text-muted-foreground">
-          {authStatus.userInfo.name}
-        </span>
-      )}
-      
+      {/* Action Buttons */}
       <div className="flex items-center gap-1">
         <Button
           variant="ghost"
@@ -124,17 +148,20 @@ export const CashKaroStatus: React.FC = () => {
           onClick={checkAuthStatus}
           disabled={isLoading}
           className="h-8 px-2"
+          title="Refresh CashKaro status"
         >
           <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
         </Button>
         
         <Button
-          variant="ghost"
+          variant={authStatus?.isSignedIn ? "ghost" : "default"}
           size="sm"
           onClick={openCashKaro}
-          className="h-8 px-2"
+          className={`h-8 px-3 ${!authStatus?.isSignedIn ? 'bg-orange-600 hover:bg-orange-700 text-white' : ''}`}
+          title={authStatus?.isSignedIn ? "Visit CashKaro" : "Sign in to CashKaro"}
         >
-          <ExternalLink className="w-3 h-3" />
+          <ExternalLink className="w-3 h-3 mr-1" />
+          {authStatus?.isSignedIn ? "Visit" : "Sign In"}
         </Button>
       </div>
     </div>

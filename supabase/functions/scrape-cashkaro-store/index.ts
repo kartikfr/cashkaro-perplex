@@ -30,37 +30,108 @@ serve(async (req) => {
 
     console.log(`Scraping CashKaro store page for: ${retailer}`);
 
-    // Map retailer names to CashKaro store URLs
-    const storeUrls: Record<string, string> = {
-      'amazon': 'https://cashkaro.com/amazon',
-      'flipkart': 'https://cashkaro.com/flipkart',
-      'myntra': 'https://cashkaro.com/myntra',
-      'ajio': 'https://cashkaro.com/ajio',
-      'nykaa': 'https://cashkaro.com/nykaa',
-      'tatacliq': 'https://cashkaro.com/tatacliq',
+    // Map retailer names to CashKaro store URLs - try multiple URL patterns
+    const storeUrls: Record<string, string[]> = {
+      'amazon': [
+        'https://cashkaro.com/amazon-coupons',
+        'https://cashkaro.com/amazon',
+        'https://cashkaro.com/stores/amazon'
+      ],
+      'flipkart': [
+        'https://cashkaro.com/flipkart-coupons', 
+        'https://cashkaro.com/flipkart',
+        'https://cashkaro.com/stores/flipkart'
+      ],
+      'myntra': [
+        'https://cashkaro.com/myntra-coupons',
+        'https://cashkaro.com/myntra', 
+        'https://cashkaro.com/stores/myntra'
+      ],
+      'ajio': [
+        'https://cashkaro.com/ajio-coupons',
+        'https://cashkaro.com/ajio',
+        'https://cashkaro.com/stores/ajio'
+      ],
+      'nykaa': [
+        'https://cashkaro.com/nykaa-coupons',
+        'https://cashkaro.com/nykaa',
+        'https://cashkaro.com/stores/nykaa'
+      ],
+      'tatacliq': [
+        'https://cashkaro.com/tatacliq-coupons',
+        'https://cashkaro.com/tatacliq',
+        'https://cashkaro.com/stores/tatacliq'
+      ],
     };
 
-    const storeUrl = storeUrls[retailer.toLowerCase()];
-    if (!storeUrl) {
+    const possibleUrls = storeUrls[retailer.toLowerCase()];
+    if (!possibleUrls) {
       throw new Error(`Unsupported retailer: ${retailer}`);
     }
 
-    // Fetch the CashKaro store page
-    const response = await fetch(storeUrl, {
-      method: 'GET',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Referer': 'https://cashkaro.com/',
-      },
-    });
+    let html = '';
+    let successUrl = '';
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+    // Try each URL until one works
+    for (const storeUrl of possibleUrls) {
+      try {
+        console.log(`Trying CashKaro store page: ${storeUrl}`);
+
+        const response = await fetch(storeUrl, {
+          method: 'GET',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Referer': 'https://cashkaro.com/',
+          },
+        });
+
+        if (response.ok) {
+          html = await response.text();
+          successUrl = storeUrl;
+          console.log(`Successfully fetched from: ${successUrl}`);
+          break;
+        } else {
+          console.log(`Failed to fetch ${storeUrl}: ${response.status}`);
+        }
+      } catch (error) {
+        console.log(`Error fetching ${storeUrl}:`, error);
+        continue;
+      }
     }
 
-    const html = await response.text();
+    // If all URLs failed, use fallback parameters immediately
+    if (!html) {
+      console.log('All URLs failed, using fallback parameters');
+      
+      const fallbackParams: Record<string, any> = {
+        amazon: { cashKaroId: 'ck_amazon', sourceId: 'cashkaro', affid: 'cashkaro-21' },
+        flipkart: { cashKaroId: 'ck_flipkart', sourceId: 'cashkaro', affid: 'cashkaro' },
+        myntra: { cashKaroId: 'ck_myntra', sourceId: 'cashkaro', affid: 'cashkaro_myntra' },
+        ajio: { cashKaroId: 'ck_ajio', sourceId: 'cashkaro', affid: 'cashkaro_ajio' },
+        nykaa: { cashKaroId: 'ck_nykaa', sourceId: 'cashkaro', affid: 'cashkaro_nykaa' },
+        tatacliq: { cashKaroId: 'ck_tatacliq', sourceId: 'cashkaro', affid: 'cashkaro_tatacliq' }
+      };
+      
+      const retailerParams = fallbackParams[retailer.toLowerCase()] || {};
+      const params = {
+        retailer,
+        ...retailerParams,
+        trackingId: `${retailer}_${Date.now()}`,
+        timestamp: new Date().toISOString()
+      };
+
+      return new Response(
+        JSON.stringify(params),
+        { 
+          headers: { 
+            ...corsHeaders, 
+            'Content-Type': 'application/json' 
+          } 
+        }
+      );
+    }
     console.log(`Retrieved ${retailer} store page, extracting parameters`);
 
     // Extract parameters from the page
