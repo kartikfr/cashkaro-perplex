@@ -53,9 +53,8 @@ serve(async (req) => {
 
     // Build search query
     const searchQuery = buildSearchQuery(query, retailer, retailerDomains);
-    const domainFilter = getDomainFilter(retailer, retailerDomains);
 
-    // Call Perplexity Search API
+    // Call Perplexity Search API (no domain filter - it's not supported)
     const response = await fetch(PERPLEXITY_SEARCH_API, {
       method: 'POST',
       headers: {
@@ -64,11 +63,10 @@ serve(async (req) => {
       },
       body: JSON.stringify({
         query: searchQuery,
-        max_results: limit * 2, // Get more results to filter
+        max_results: 20, // Get more results to filter by retailer
         return_images: true,
         return_snippets: true,
-        country: 'IN', // Focus on Indian results
-        search_domain_filter: domainFilter
+        country: 'IN' // Focus on Indian results
       }),
     });
 
@@ -127,14 +125,6 @@ function buildSearchQuery(query: string, retailer: string, retailerDomains: Reco
   return `${sanitizedQuery} products on ${retailerName} India`;
 }
 
-function getDomainFilter(retailer: string, retailerDomains: Record<string, string>): string[] {
-  if (retailer === 'all') {
-    return Object.values(retailerDomains);
-  }
-  
-  const domain = retailerDomains[retailer as keyof typeof retailerDomains];
-  return domain ? [domain] : Object.values(retailerDomains);
-}
 
 function processSearchResults(data: any, retailer: string, limit: number, retailerDomains: Record<string, string>): SearchResult[] {
   if (!data.results || !Array.isArray(data.results)) {
