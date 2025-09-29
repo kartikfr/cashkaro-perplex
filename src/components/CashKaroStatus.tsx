@@ -95,52 +95,21 @@ export const CashKaroStatus: React.FC = () => {
     return 'CashKaro Disconnected';
   };
 
+  const handleStatusClick = () => {
+    if (!authStatus?.isSignedIn) {
+      openCashKaro();
+    }
+  };
+
   return (
-    <div className="flex items-center gap-3">
-      {/* Status Badge matching API Connected style */}
-      <Badge variant="outline" className="text-xs flex items-center gap-2">
-        {getStatusIcon()}
-        {getStatusText()}
-      </Badge>
-      
-      {/* Action Buttons */}
-      <div className="flex items-center gap-1">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={checkAuthStatus}
-          disabled={isLoading}
-          className="h-8 px-2"
-          title="Refresh CashKaro status"
-        >
-          <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
-        </Button>
-        
-        {!authStatus?.isSignedIn && (
-          <Button
-            variant="default"
-            size="sm"
-            onClick={openCashKaro}
-            className="h-8 px-3 bg-orange-600 hover:bg-orange-700 text-white"
-            title="Sign in to CashKaro to earn cashback"
-          >
-            <ExternalLink className="w-3 h-3 mr-1" />
-            Connect CashKaro
-          </Button>
-        )}
-        
-        {authStatus?.isSignedIn && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={openCashKaro}
-            className="h-8 px-2"
-            title="Visit CashKaro"
-          >
-            <ExternalLink className="w-3 h-3" />
-          </Button>
-        )}
-      </div>
-    </div>
+    <Badge 
+      variant="outline" 
+      className={`text-xs flex items-center gap-2 ${!authStatus?.isSignedIn ? 'cursor-pointer hover:bg-accent' : ''}`}
+      onClick={handleStatusClick}
+      title={!authStatus?.isSignedIn ? 'Click to connect CashKaro' : 'CashKaro is connected'}
+    >
+      {getStatusIcon()}
+      {getStatusText()}
+    </Badge>
   );
 };

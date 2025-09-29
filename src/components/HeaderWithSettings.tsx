@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import { API_CONFIG } from '@/lib/config';
+import { CashKaroStatus } from './CashKaroStatus';
 
 interface HeaderProps {
   searchService: any;
@@ -63,10 +64,14 @@ const Header: React.FC<HeaderProps> = ({ searchService, onApiKeyUpdate }) => {
 
             {/* Status & Actions */}
             <div className="flex items-center gap-4">
+              {/* API Status */}
               <Badge variant="outline" className="text-xs flex items-center gap-2">
                 {getStatusIcon()}
                 {getStatusText()}
               </Badge>
+              
+              {/* CashKaro Status */}
+              <CashKaroStatus />
               
               <div className="flex items-center gap-2">
                 <Button 
