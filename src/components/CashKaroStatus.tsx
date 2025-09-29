@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ExternalLink, RefreshCw, User, LogOut } from 'lucide-react';
+import { ExternalLink, RefreshCw, CheckCircle, XCircle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
-import { useToast } from '@/components/ui/use-toast';
+import { useToast } from '@/hooks/use-toast';
 
 interface CashKaroAuthStatus {
   isSignedIn: boolean;
@@ -71,74 +71,37 @@ export const CashKaroStatus: React.FC = () => {
     checkAuthStatus();
   }, []);
 
-  const getStatusBadge = () => {
+  const getStatusIcon = () => {
     if (isLoading) {
-      return (
-        <Badge variant="outline" className="animate-pulse">
-          <RefreshCw className="w-3 h-3 mr-1 animate-spin" />
-          Checking...
-        </Badge>
-      );
+      return <RefreshCw className="w-4 h-4 animate-spin" />;
     }
-
-    if (!authStatus) {
-      return (
-        <Badge variant="destructive">
-          <LogOut className="w-3 h-3 mr-1" />
-          Unknown
-        </Badge>
-      );
-    }
-
-    if (authStatus.isSignedIn) {
-      return (
-        <Badge variant="default" className="bg-green-600 hover:bg-green-700">
-          <User className="w-3 h-3 mr-1" />
-          Connected
-        </Badge>
-      );
-    }
-
-    return (
-      <Badge variant="destructive">
-        <LogOut className="w-3 h-3 mr-1" />
-        Not Connected
-      </Badge>
-    );
-  };
-
-  const getConnectionMessage = () => {
+    
     if (authStatus?.isSignedIn) {
-      return {
-        title: "CashKaro Connected ✓",
-        subtitle: authStatus.userInfo?.name || "You're signed in to CashKaro",
-        action: "Your purchases will earn cashback automatically"
-      };
+      return <CheckCircle className="w-4 h-4 text-green-500" />;
     }
-    return {
-      title: "CashKaro Not Connected",
-      subtitle: "Sign in to CashKaro to earn cashback",
-      action: "Click to sign in and start earning"
-    };
+    
+    return <XCircle className="w-4 h-4 text-red-500" />;
   };
 
-  const message = getConnectionMessage();
+  const getStatusText = () => {
+    if (isLoading) {
+      return 'Checking...';
+    }
+    
+    if (authStatus?.isSignedIn) {
+      return 'CashKaro Connected';
+    }
+    
+    return 'CashKaro Disconnected';
+  };
 
   return (
     <div className="flex items-center gap-3">
-      {/* Main Status Display */}
-      <div className="flex items-center gap-2">
-        {getStatusBadge()}
-        
-        <div className="hidden sm:flex flex-col">
-          <span className={`text-xs font-medium ${authStatus?.isSignedIn ? 'text-green-600' : 'text-destructive'}`}>
-            {message.title}
-          </span>
-          <span className="text-xs text-muted-foreground">
-            {message.subtitle}
-          </span>
-        </div>
-      </div>
+      {/* Status Badge matching API Connected style */}
+      <Badge variant="outline" className="text-xs flex items-center gap-2">
+        {getStatusIcon()}
+        {getStatusText()}
+      </Badge>
       
       {/* Action Buttons */}
       <div className="flex items-center gap-1">
@@ -153,16 +116,30 @@ export const CashKaroStatus: React.FC = () => {
           <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
         </Button>
         
-        <Button
-          variant={authStatus?.isSignedIn ? "ghost" : "default"}
-          size="sm"
-          onClick={openCashKaro}
-          className={`h-8 px-3 ${!authStatus?.isSignedIn ? 'bg-orange-600 hover:bg-orange-700 text-white' : ''}`}
-          title={authStatus?.isSignedIn ? "Visit CashKaro" : "Sign in to CashKaro"}
-        >
-          <ExternalLink className="w-3 h-3 mr-1" />
-          {authStatus?.isSignedIn ? "Visit" : "Sign In"}
-        </Button>
+        {!authStatus?.isSignedIn && (
+          <Button
+            variant="default"
+            size="sm"
+            onClick={openCashKaro}
+            className="h-8 px-3 bg-orange-600 hover:bg-orange-700 text-white"
+            title="Sign in to CashKaro to earn cashback"
+          >
+            <ExternalLink className="w-3 h-3 mr-1" />
+            Connect CashKaro
+          </Button>
+        )}
+        
+        {authStatus?.isSignedIn && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={openCashKaro}
+            className="h-8 px-2"
+            title="Visit CashKaro"
+          >
+            <ExternalLink className="w-3 h-3" />
+          </Button>
+        )}
       </div>
     </div>
   );
