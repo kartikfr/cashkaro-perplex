@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, ShoppingCart, Zap, Star, Loader2, AlertCircle } from 'lucide-react';
+import { Search, ShoppingCart, Zap, Star, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
@@ -11,7 +11,7 @@ import URLBuilder from '@/lib/urlBuilder';
 import { API_CONFIG } from '@/lib/config';
 
 // Use the configured API key
-const DEFAULT_API_KEY = API_CONFIG.PERPLEXITY_API_KEY;
+const DEFAULT_API_KEY = API_CONFIG.PERPLEXITY_API_KEY as string;
 
 interface Retailer {
   id: string;
@@ -28,6 +28,37 @@ const RETAILERS: Retailer[] = [
   { id: 'ajio', name: 'AJIO', domain: 'ajio.com', color: 'bg-yellow-500' },
 ];
 
+// Sample fallback results
+const SAMPLE_RESULTS: SearchResult[] = [
+  {
+    id: '1',
+    title: 'Premium Cotton Double Bed Blanket - Soft & Warm Winter Collection',
+    url: 'https://amazon.in/dp/B08X123',
+    snippet: 'Ultra-soft cotton blend blanket perfect for winter. Machine washable and lightweight.',
+    price: '₹399',
+    retailer: 'amazon',
+    timestamp: Date.now(),
+  },
+  {
+    id: '2',
+    title: 'Cozy Fleece Blanket Single Bed Size - Multiple Colors Available',
+    url: 'https://flipkart.com/product/xyz',
+    snippet: 'Comfortable fleece material that retains warmth. Available in 8 different colors.',
+    price: '₹299',
+    retailer: 'flipkart',
+    timestamp: Date.now(),
+  },
+  {
+    id: '3',
+    title: 'Luxe Microfiber Throw Blanket - Premium Quality Home Decor',
+    url: 'https://myntra.com/item/abc',
+    snippet: 'Decorative throw blanket made from premium microfiber. Perfect for living rooms.',
+    price: '₹450',
+    retailer: 'myntra',
+    timestamp: Date.now(),
+  },
+];
+
 const SearchInterface: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRetailer, setSelectedRetailer] = useState('all');
@@ -38,6 +69,7 @@ const SearchInterface: React.FC = () => {
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
   const [searchService, setSearchService] = useState<SearchService | null>(null);
   const [urlBuilder] = useState(new URLBuilder());
+  const [useFallback, setUseFallback] = useState(false);
   const { toast } = useToast();
 
   // Initialize search service when API key changes
@@ -58,9 +90,9 @@ const SearchInterface: React.FC = () => {
     [searchService]
   );
 
-  // Real search function using Perplexity API
+  // Real search function using Perplexity API with fallback
   const performSearch = async (query: string, retailer: string) => {
-    if (!searchService) {
+    if (!searchService && !useFallback) {
       setError('Search service not initialized');
       return;
     }
@@ -69,16 +101,46 @@ const SearchInterface: React.FC = () => {
     setError(null);
     
     try {
-      const searchResults = await searchService.search(query, retailer, 5);
-      setResults(searchResults);
-      
-      toast({
-        title: "Search Complete",
-        description: `Found ${searchResults.length} products`,
-      });
+      if (useFallback || !searchService) {
+        // Use sample results as fallback
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate delay
+        
+        let filteredResults = SAMPLE_RESULTS;
+        if (retailer !== 'all') {
+          filteredResults = SAMPLE_RESULTS.filter(result => result.retailer === retailer);
+        }
+        
+        setResults(filteredResults);
+        toast({
+          title: "Search Complete (Demo Mode)",
+          description: `Found ${filteredResults.length} sample products`,
+        });
+      } else {
+        const searchResults = await searchService.search(query, retailer, 5);
+        setResults(searchResults);
+        
+        toast({
+          title: "Search Complete",
+          description: `Found ${searchResults.length} products`,
+        });
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Search failed';
       setError(errorMessage);
+      
+      // Auto-switch to fallback mode on API errors
+      if (!useFallback) {
+        setUseFallback(true);
+        toast({
+          title: "API Error - Switching to Demo Mode",
+          description: "Using sample results. Check your API configuration.",
+          variant: "destructive",
+        });
+        
+        // Retry with fallback
+        setTimeout(() => performSearch(query, retailer), 500);
+        return;
+      }
       
       toast({
         title: "Search Failed",
@@ -130,7 +192,7 @@ const SearchInterface: React.FC = () => {
 
   // Handle search with debouncing
   const handleSearch = () => {
-    if (searchQuery.trim() && searchService) {
+    if (searchQuery.trim()) {
       performSearch(searchQuery, selectedRetailer);
     }
   };
@@ -146,7 +208,7 @@ const SearchInterface: React.FC = () => {
   // Handle retailer change
   const handleRetailerChange = (retailer: string) => {
     setSelectedRetailer(retailer);
-    if (searchQuery.trim() && searchService) {
+    if (searchQuery.trim()) {
       debouncedSearch(searchQuery, retailer);
     }
   };
@@ -156,9 +218,18 @@ const SearchInterface: React.FC = () => {
     return retailer?.color || 'bg-gray-500';
   };
 
+  const toggleMode = () => {
+    setUseFallback(!useFallback);
+    setError(null);
+    toast({
+      title: useFallback ? "Switching to API Mode" : "Switching to Demo Mode",
+      description: useFallback ? "Will use Perplexity API for searches" : "Will use sample results",
+    });
+  };
+
   return (
     <div className="w-full max-w-4xl mx-auto space-y-6">
-      {/* API Key Input - Only show if needed */}
+      {/* Mode Toggle & API Key Input */}
       {showApiKeyInput && (
         <Card className="p-6 bg-accent/50 border-primary/20">
           <div className="space-y-4">
@@ -210,7 +281,7 @@ const SearchInterface: React.FC = () => {
             />
             <Button 
               onClick={handleSearch}
-              disabled={isLoading || !searchQuery.trim() || !searchService}
+              disabled={isLoading || !searchQuery.trim()}
               className="absolute right-2 top-1/2 transform -translate-y-1/2"
               size="sm"
             >
@@ -252,11 +323,18 @@ const SearchInterface: React.FC = () => {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-2xl font-bold">Search Results</h2>
-            {results.length > 0 && (
-              <Badge variant="outline" className="font-medium">
-                {results.length} products found
-              </Badge>
-            )}
+            <div className="flex items-center gap-2">
+              {results.length > 0 && (
+                <Badge variant="outline" className="font-medium">
+                  {results.length} products found
+                </Badge>
+              )}
+              {useFallback && (
+                <Badge variant="secondary" className="text-xs">
+                  Demo Mode
+                </Badge>
+              )}
+            </div>
           </div>
 
           {isLoading ? (
@@ -325,19 +403,29 @@ const SearchInterface: React.FC = () => {
       <Card className="p-4 bg-muted/30">
         <div className="flex items-center justify-between">
           <div className="space-y-1">
-            <h3 className="font-medium">API Configuration</h3>
+            <h3 className="font-medium">Search Configuration</h3>
             <p className="text-sm text-muted-foreground">
-              {searchService ? 'Perplexity API configured' : 'API not configured'}
+              {useFallback ? 'Demo mode with sample results' : (searchService ? 'Perplexity API configured' : 'API not configured')}
             </p>
           </div>
-          <Button 
-            variant="outline" 
-            size="sm"
-            onClick={() => setShowApiKeyInput(!showApiKeyInput)}
-          >
-            <Zap className="w-4 h-4" />
-            {showApiKeyInput ? 'Hide' : 'Configure'}
-          </Button>
+          <div className="flex gap-2">
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={toggleMode}
+            >
+              <RefreshCw className="w-4 h-4" />
+              {useFallback ? 'Use API' : 'Use Demo'}
+            </Button>
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => setShowApiKeyInput(!showApiKeyInput)}
+            >
+              <Zap className="w-4 h-4" />
+              Configure
+            </Button>
+          </div>
         </div>
       </Card>
 
@@ -349,7 +437,7 @@ const SearchInterface: React.FC = () => {
             <h3 className="font-semibold">How It Works</h3>
           </div>
           <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
-            <li>Search for products across major Indian retailers using Perplexity AI</li>
+            <li>Search for products across major Indian retailers using {useFallback ? 'demo data' : 'Perplexity AI'}</li>
             <li>Click any result to automatically get CashKaro cashback tracking</li>
             <li>Shop normally and earn cashback without extra steps</li>
           </ol>
