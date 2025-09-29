@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.scrape-cashkaro-store]
 verify_jwt = false
+
+[functions.search-products]
+verify_jwt = false

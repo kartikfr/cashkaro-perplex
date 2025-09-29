@@ -1,24 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import HeaderWithSettings from '@/components/HeaderWithSettings';
 import HeroSection from '@/components/HeroSection';
 import SearchInterface from '@/components/SearchInterface';
 import SearchService from '@/lib/searchService';
-import { API_CONFIG } from '@/lib/config';
 
 const Index = () => {
-  const [searchService, setSearchService] = useState<SearchService | null>(null);
+  // Initialize with a default search service instance
+  const [searchService] = useState<SearchService>(new SearchService());
 
-  // Initialize search service with default API key
-  useEffect(() => {
-    if (API_CONFIG.PERPLEXITY_API_KEY) {
-      setSearchService(new SearchService(API_CONFIG.PERPLEXITY_API_KEY));
-    }
-  }, []);
-
+  // This function is no longer needed since we use Edge Functions
   const handleApiKeyUpdate = (apiKey: string) => {
-    if (apiKey.trim()) {
-      setSearchService(new SearchService(apiKey));
-    }
+    // Legacy function - API key is now handled securely in Edge Functions
+    console.log('API key management is now handled securely via Supabase Edge Functions');
   };
 
   return (

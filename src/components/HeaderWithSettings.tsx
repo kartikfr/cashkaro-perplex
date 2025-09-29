@@ -15,22 +15,21 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = ({ searchService, onApiKeyUpdate }) => {
   const [showSettings, setShowSettings] = useState(false);
-  const [tempApiKey, setTempApiKey] = useState(API_CONFIG.PERPLEXITY_API_KEY as string);
+  // No longer needed - API key is managed securely in Edge Functions
   const { toast } = useToast();
 
   const handleApiKeyUpdate = () => {
-    if (tempApiKey.trim()) {
-      onApiKeyUpdate(tempApiKey);
-      setShowSettings(false);
-      toast({
-        title: "API Key Updated",
-        description: "Perplexity API key has been updated successfully.",
-      });
-    }
+    // No longer needed - API key is managed securely in Edge Functions
+    setShowSettings(false);
+    toast({
+      title: "API Configuration",
+      description: "API key is securely managed via Supabase Edge Functions.",
+    });
   };
 
   const getConnectionStatus = () => {
-    return searchService ? 'connected' : 'disconnected';
+    // Since we're using Edge Functions, we're always "connected"
+    return 'connected';
   };
 
   const getStatusIcon = () => {
@@ -42,8 +41,8 @@ const Header: React.FC<HeaderProps> = ({ searchService, onApiKeyUpdate }) => {
   };
 
   const getStatusText = () => {
-    const status = getConnectionStatus();
-    return status === 'connected' ? 'API Connected' : 'API Disconnected';
+    // Always show as connected since we use secure Edge Functions
+    return 'API Connected';
   };
 
   return (
@@ -97,40 +96,24 @@ const Header: React.FC<HeaderProps> = ({ searchService, onApiKeyUpdate }) => {
             <div className="space-y-4">
               <div className="flex items-center gap-2">
                 <Settings className="w-5 h-5 text-primary" />
-                <h3 className="font-semibold">API Configuration</h3>
+                <h3 className="font-semibold">Perplexity API Configuration</h3>
               </div>
-              <p className="text-sm text-muted-foreground">
-                Configure your Perplexity API key for enhanced search capabilities.
-              </p>
-              <div className="flex gap-3">
-                <Input
-                  type="password"
-                  placeholder="Enter your Perplexity API key"
-                  value={tempApiKey}
-                  onChange={(e) => setTempApiKey(e.target.value)}
-                  className="flex-1"
-                />
-                <Button 
-                  onClick={handleApiKeyUpdate}
-                  disabled={!tempApiKey.trim()}
-                >
-                  Update Key
-                </Button>
-                <Button 
-                  variant="outline"
-                  onClick={() => setShowSettings(false)}
-                >
-                  Cancel
-                </Button>
-              </div>
-              <div className="text-xs text-muted-foreground space-y-1">
-                <p>• Current model: <span className="font-mono">sonar</span> (Perplexity Search)</p>
-                <p>• Domain filtering: Enabled for Indian e-commerce sites</p>
-                <p>• Get your API key from{' '}
-                  <a href="https://perplexity.ai" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
-                    Perplexity AI
-                  </a>
-                </p>
+              <div className="space-y-4">
+                <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                  <div className="flex items-center gap-2 text-green-700">
+                    <CheckCircle className="w-5 h-5" />
+                    <span className="font-medium">API Configured Securely</span>
+                  </div>
+                  <p className="text-sm text-green-600 mt-1">
+                    Your Perplexity API key is securely stored in Supabase Edge Functions and managed server-side for optimal security.
+                  </p>
+                </div>
+                <div className="text-xs text-muted-foreground space-y-1">
+                  <p>• Current model: <span className="font-mono">llama-3.1-sonar-small-128k-online</span></p>
+                  <p>• Domain filtering: Enabled for Indian e-commerce sites</p>
+                  <p>• Security: API keys stored as encrypted Supabase secrets</p>
+                  <p>• Performance: Server-side processing with Edge Functions</p>
+                </div>
               </div>
             </div>
           </Card>

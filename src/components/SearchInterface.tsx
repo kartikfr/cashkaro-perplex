@@ -8,10 +8,8 @@ import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
 import SearchService, { SearchResult } from '@/lib/searchService';
 import URLBuilder from '@/lib/urlBuilder';
-import { API_CONFIG } from '@/lib/config';
 
-// Use the configured API key
-const DEFAULT_API_KEY = API_CONFIG.PERPLEXITY_API_KEY as string;
+// No longer needed - API key is managed securely in Edge Functions
 
 interface Retailer {
   id: string;
@@ -65,20 +63,19 @@ const SearchInterface: React.FC = () => {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [apiKey, setApiKey] = useState(DEFAULT_API_KEY as string);
+  const [apiKey, setApiKey] = useState('');
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
-  const [searchService, setSearchService] = useState<SearchService | null>(null);
+  // Initialize search service - no API key needed since we use Edge Functions
+  const [searchService] = useState(new SearchService());
   const [urlBuilder] = useState(new URLBuilder());
   const [useFallback, setUseFallback] = useState(false);
   const { toast } = useToast();
 
-  // Initialize search service when API key changes
+  // API key is no longer needed since we use secure Edge Functions
   useEffect(() => {
-    if (apiKey.trim()) {
-      setSearchService(new SearchService(apiKey));
-      setShowApiKeyInput(false);
-    }
-  }, [apiKey]);
+    // Remove API key input UI since we use Edge Functions
+    setShowApiKeyInput(false);
+  }, []);
 
   // Debounced search function
   const debouncedSearch = useCallback(
@@ -92,16 +89,11 @@ const SearchInterface: React.FC = () => {
 
   // Real search function using Perplexity API with fallback
   const performSearch = async (query: string, retailer: string) => {
-    if (!searchService && !useFallback) {
-      setError('Search service not initialized');
-      return;
-    }
-
     setIsLoading(true);
     setError(null);
     
     try {
-      if (useFallback || !searchService) {
+      if (useFallback) {
         // Use sample results as fallback
         await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate delay
         

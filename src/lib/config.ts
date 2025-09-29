@@ -1,11 +1,7 @@
-// Environment configuration for API keys
+// Environment configuration - No API keys stored here for security
+// API keys are now managed securely via Supabase Edge Function secrets
 export const API_CONFIG = {
-  PERPLEXITY_API_KEY: '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',
+  // API keys are handled server-side for security
 } as const;
-
-// In a real application, you would use:
-// export const API_CONFIG = {
-//   PERPLEXITY_API_KEY: process.env.PERPLEXITY_API_KEY || '',
-// } as const;
 
 export default API_CONFIG;
