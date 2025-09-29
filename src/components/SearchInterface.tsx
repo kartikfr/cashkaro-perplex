@@ -63,12 +63,19 @@ const SearchInterface: React.FC = () => {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [searchMetadata, setSearchMetadata] = useState<any>(null);
+  const [apiKey, setApiKey] = useState('');
+  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
+  // Initialize search service - no API key needed since we use Edge Functions
   const [searchService] = useState(new SearchService());
   const [urlBuilder] = useState(new URLBuilder());
   const [useFallback, setUseFallback] = useState(false);
   const { toast } = useToast();
 
+  // API key is no longer needed since we use secure Edge Functions
+  useEffect(() => {
+    // Remove API key input UI since we use Edge Functions
+    setShowApiKeyInput(false);
+  }, []);
 
   // Debounced search function
   const debouncedSearch = useCallback(
@@ -80,16 +87,15 @@ const SearchInterface: React.FC = () => {
     [searchService]
   );
 
-  // Optimized search function
+  // Real search function using Perplexity API with fallback
   const performSearch = async (query: string, retailer: string) => {
     setIsLoading(true);
     setError(null);
-    setSearchMetadata(null);
     
     try {
       if (useFallback) {
         // Use sample results as fallback
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate delay
         
         let filteredResults = SAMPLE_RESULTS;
         if (retailer !== 'all') {
@@ -97,54 +103,39 @@ const SearchInterface: React.FC = () => {
         }
         
         setResults(filteredResults);
-        setSearchMetadata({
-          totalFound: SAMPLE_RESULTS.length,
-          filtered: filteredResults.length,
-          mode: 'demo'
-        });
-        
         toast({
-          title: "✨ Search Complete (Demo)",
+          title: "Search Complete (Demo Mode)",
           description: `Found ${filteredResults.length} sample products`,
         });
       } else {
-        console.log(`🔍 Starting optimized search for: "${query}"`);
         const searchResults = await searchService.search(query, retailer, 5);
-        
         setResults(searchResults);
         
-        // Store metadata if available
-        if ((searchResults as any).metadata) {
-          setSearchMetadata((searchResults as any).metadata);
-        }
-        
         toast({
-          title: "✅ Search Complete",
-          description: `Found ${searchResults.length} quality results`,
+          title: "Search Complete",
+          description: `Found ${searchResults.length} products`,
         });
-        
-        console.log(`✨ Displayed ${searchResults.length} results with relevance scoring`);
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Search failed';
       setError(errorMessage);
-      console.error('❌ Search failed:', errorMessage);
       
-      // Auto-switch to fallback mode on repeated API errors
+      // Auto-switch to fallback mode on API errors
       if (!useFallback) {
         setUseFallback(true);
         toast({
-          title: "⚠️ API Error - Using Demo Mode",
-          description: "Showing sample results. The search is still being optimized.",
+          title: "API Error - Switching to Demo Mode",
+          description: "Using sample results. Check your API configuration.",
           variant: "destructive",
         });
         
+        // Retry with fallback
         setTimeout(() => performSearch(query, retailer), 500);
         return;
       }
       
       toast({
-        title: "❌ Search Failed",
+        title: "Search Failed",
         description: errorMessage,
         variant: "destructive",
       });
@@ -231,23 +222,51 @@ const SearchInterface: React.FC = () => {
   };
 
   const toggleMode = () => {
-    const newMode = !useFallback;
-    setUseFallback(newMode);
+    setUseFallback(!useFallback);
     setError(null);
-    
-    // Clear cache when switching modes
-    if (!newMode) {
-      searchService.clearCache();
-    }
-    
     toast({
-      title: newMode ? "🎭 Demo Mode" : "⚡ AI Search Mode",
-      description: newMode ? "Using sample results" : "Using optimized Perplexity AI search",
+      title: useFallback ? "Switching to API Mode" : "Switching to Demo Mode",
+      description: useFallback ? "Will use Perplexity API for searches" : "Will use sample results",
     });
   };
 
   return (
     <div className="w-full max-w-4xl mx-auto space-y-6">
+      {/* Mode Toggle & API Key Input */}
+      {showApiKeyInput && (
+        <Card className="p-6 bg-accent/50 border-primary/20">
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <Zap className="w-5 h-5 text-primary" />
+              <h3 className="font-semibold">Configure Perplexity API</h3>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Update your Perplexity API key for enhanced search capabilities.
+            </p>
+            <div className="flex gap-3">
+              <Input
+                type="password"
+                placeholder="Enter your Perplexity API key"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                className="flex-1"
+              />
+              <Button 
+                onClick={() => setShowApiKeyInput(false)}
+                disabled={!apiKey.trim()}
+              >
+                Update
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Don't have an API key? Get one from{' '}
+              <a href="https://perplexity.ai" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                Perplexity AI
+              </a>
+            </p>
+          </div>
+        </Card>
+      )}
 
       {/* Search Interface */}
       <Card className="p-6 bg-gradient-card shadow-card">
@@ -305,27 +324,17 @@ const SearchInterface: React.FC = () => {
       {/* Results Section */}
       {(results.length > 0 || isLoading) && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center justify-between">
             <h2 className="text-2xl font-bold">Search Results</h2>
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
               {results.length > 0 && (
                 <Badge variant="outline" className="font-medium">
-                  {results.length} products
-                </Badge>
-              )}
-              {searchMetadata && searchMetadata.totalFound && (
-                <Badge variant="secondary" className="text-xs">
-                  {searchMetadata.filtered}/{searchMetadata.totalFound} filtered
+                  {results.length} products found
                 </Badge>
               )}
               {useFallback && (
                 <Badge variant="secondary" className="text-xs">
-                  🎭 Demo Mode
-                </Badge>
-              )}
-              {!useFallback && results.length > 0 && (
-                <Badge variant="default" className="text-xs">
-                  ⚡ AI-Optimized
+                  Demo Mode
                 </Badge>
               )}
             </div>
@@ -352,19 +361,8 @@ const SearchInterface: React.FC = () => {
                   onClick={() => handleProductClick(result)}
                 >
                   <div className="flex items-start justify-between gap-4">
-                    {result.image && (
-                      <img 
-                        src={result.image} 
-                        alt={result.title}
-                        className="w-24 h-24 object-cover rounded-lg shrink-0"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = 'none';
-                        }}
-                      />
-                    )}
-                    
                     <div className="flex-1 space-y-2">
-                      <div className="flex items-center gap-2 flex-wrap">
+                      <div className="flex items-center gap-2">
                         <Badge 
                           className={`${getRetailerBadgeColor(result.retailer)} text-white`}
                         >
@@ -375,11 +373,6 @@ const SearchInterface: React.FC = () => {
                             {result.price}
                           </Badge>
                         )}
-                        {result.relevanceScore && result.relevanceScore > 0.7 && (
-                          <Badge variant="default" className="text-xs">
-                            ⭐ Top Match
-                          </Badge>
-                        )}
                       </div>
                       
                       <h3 className="font-semibold text-lg group-hover:text-primary transition-colors">
@@ -387,14 +380,14 @@ const SearchInterface: React.FC = () => {
                       </h3>
                       
                       {result.snippet && (
-                        <p className="text-muted-foreground text-sm line-clamp-2">
+                        <p className="text-muted-foreground text-sm">
                           {result.snippet}
                         </p>
                       )}
                       
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
                         <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                        <span className="font-medium">CashKaro Cashback Eligible</span>
+                        CashKaro Cashback Eligible
                       </div>
                     </div>
                     
@@ -409,23 +402,33 @@ const SearchInterface: React.FC = () => {
         </div>
       )}
 
-      {/* Settings Toggle - Simplified without API key input */}
+      {/* Settings Toggle */}
       <Card className="p-4 bg-muted/30">
         <div className="flex items-center justify-between">
           <div className="space-y-1">
-            <h3 className="font-medium">🚀 Search Engine Status</h3>
+            <h3 className="font-medium">Search Configuration</h3>
             <p className="text-sm text-muted-foreground">
-              {useFallback ? '🎭 Demo mode with sample results' : '⚡ AI-powered search with relevance ranking'}
+              {useFallback ? 'Demo mode with sample results' : (searchService ? 'Perplexity API configured' : 'API not configured')}
             </p>
           </div>
-          <Button 
-            variant="outline" 
-            size="sm"
-            onClick={toggleMode}
-          >
-            <RefreshCw className="w-4 h-4" />
-            {useFallback ? 'Use AI Search' : 'Use Demo'}
-          </Button>
+          <div className="flex gap-2">
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={toggleMode}
+            >
+              <RefreshCw className="w-4 h-4" />
+              {useFallback ? 'Use API' : 'Use Demo'}
+            </Button>
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => setShowApiKeyInput(!showApiKeyInput)}
+            >
+              <Zap className="w-4 h-4" />
+              Configure
+            </Button>
+          </div>
         </div>
       </Card>
 
@@ -434,16 +437,13 @@ const SearchInterface: React.FC = () => {
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             <Zap className="w-5 h-5 text-primary" />
-            <h3 className="font-semibold">🚀 Optimized AI Search Features</h3>
+            <h3 className="font-semibold">How It Works</h3>
           </div>
-          <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
-            <li>🎯 <strong>Relevance Scoring:</strong> Results ranked by quality and match accuracy</li>
-            <li>🔄 <strong>Smart Retry Logic:</strong> Automatic retry with exponential backoff</li>
-            <li>💰 <strong>Price Extraction:</strong> Automatic price detection from multiple formats</li>
-            <li>⚡ <strong>Caching:</strong> Faster repeat searches with 5-minute cache</li>
-            <li>🛍️ <strong>CashKaro Integration:</strong> Automatic cashback tracking on all clicks</li>
-            <li>🎨 <strong>Image Quality:</strong> Best product images automatically selected</li>
-          </ul>
+          <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
+            <li>Search for products across major Indian retailers using {useFallback ? 'demo data' : 'Perplexity AI'}</li>
+            <li>Click any result to automatically get CashKaro cashback tracking</li>
+            <li>Shop normally and earn cashback without extra steps</li>
+          </ol>
         </div>
       </Card>
     </div>

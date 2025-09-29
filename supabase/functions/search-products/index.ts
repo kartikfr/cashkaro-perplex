@@ -6,7 +6,6 @@ const corsHeaders = {
 }
 
 const PERPLEXITY_API_KEY = Deno.env.get('PERPLEXITY_API_KEY');
-const PERPLEXITY_SEARCH_API = 'https://api.perplexity.ai/search';
 
 interface SearchRequest {
   query: string;
@@ -23,35 +22,7 @@ interface SearchResult {
   image?: string;
   retailer: string;
   timestamp: number;
-  relevanceScore?: number;
 }
-
-const RETAILER_CONFIG = {
-  amazon: {
-    domain: 'amazon.in',
-    name: 'Amazon India',
-    searchHints: 'Amazon.in online shopping',
-    priceIndicators: ['₹', 'MRP', 'Price']
-  },
-  flipkart: {
-    domain: 'flipkart.com',
-    name: 'Flipkart',
-    searchHints: 'Flipkart online store',
-    priceIndicators: ['₹', 'Price']
-  },
-  myntra: {
-    domain: 'myntra.com',
-    name: 'Myntra',
-    searchHints: 'Myntra fashion store',
-    priceIndicators: ['₹', 'MRP']
-  },
-  ajio: {
-    domain: 'ajio.com',
-    name: 'AJIO',
-    searchHints: 'AJIO fashion shopping',
-    priceIndicators: ['₹', 'Price']
-  }
-};
 
 serve(async (req) => {
   // Handle CORS preflight requests
@@ -70,36 +41,66 @@ serve(async (req) => {
       throw new Error('Perplexity API key not configured');
     }
 
-    console.log(`🔍 Optimized search for: "${query}" on ${retailer}`);
+    console.log(`Searching for: "${query}" on ${retailer}`);
 
-    // Build optimized search query
-    const searchQuery = buildOptimizedSearchQuery(query, retailer);
-    console.log(`📝 Search query: "${searchQuery}"`);
+    const retailerDomains = {
+      amazon: 'amazon.in',
+      flipkart: 'flipkart.com',
+      myntra: 'myntra.com',
+      ajio: 'ajio.com'
+    };
 
-    // Call Perplexity Search API with retry logic
-    const searchResults = await searchWithRetry(searchQuery, 3);
+    // Build search prompt
+    const searchPrompt = buildSearchPrompt(query, retailer, retailerDomains);
+    const domainFilter = getDomainFilter(retailer, retailerDomains);
+
+    // Call Perplexity API
+    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'sonar',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a product search assistant for Indian e-commerce. Return product information in a structured format with title, URL, price (in ₹ if available), and brief description. Focus on Indian e-commerce sites. Format your response as a clear numbered list with each product on separate lines.'
+          },
+          {
+            role: 'user',
+            content: searchPrompt
+          }
+        ],
+        temperature: 0.2,
+        top_p: 0.9,
+        max_tokens: 1000,
+        return_images: false,
+        return_related_questions: false,
+        search_domain_filter: domainFilter,
+        search_recency_filter: 'month',
+        frequency_penalty: 1,
+        presence_penalty: 0
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error(`Perplexity API Error ${response.status}:`, errorData);
+      throw new Error(`Perplexity API Error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log('Perplexity response received');
+
+    // Parse search results
+    const results = parseSearchResults(data, retailer, limit, retailerDomains);
     
-    // Process and rank results
-    const processedResults = processAndRankResults(
-      searchResults,
-      query,
-      retailer,
-      limit
-    );
-    
-    console.log(`✅ Returning ${processedResults.length} optimized results`);
+    console.log(`Returning ${results.length} results`);
 
     return new Response(
-      JSON.stringify({ 
-        results: processedResults, 
-        query, 
-        retailer,
-        metadata: {
-          totalFound: searchResults.results?.length || 0,
-          filtered: processedResults.length,
-          searchQuery
-        }
-      }),
+      JSON.stringify({ results, query, retailer }),
       { 
         headers: { 
           ...corsHeaders, 
@@ -109,7 +110,7 @@ serve(async (req) => {
     );
 
   } catch (error) {
-    console.error('❌ Error in search-products function:', error);
+    console.error('Error in search-products function:', error);
     
     return new Response(
       JSON.stringify({ 
@@ -128,268 +129,110 @@ serve(async (req) => {
   }
 });
 
-// Build optimized search query with retailer-specific hints
-function buildOptimizedSearchQuery(query: string, retailer: string): string {
+function buildSearchPrompt(query: string, retailer: string, retailerDomains: Record<string, string>): string {
   const sanitizedQuery = query.trim();
   
   if (retailer === 'all') {
-    // Multi-retailer search with India-specific keywords
-    return `${sanitizedQuery} buy online India e-commerce shopping Amazon Flipkart Myntra AJIO product price`;
+    return `Find "${sanitizedQuery}" products on Indian e-commerce websites (Amazon.in, Flipkart, Myntra, AJIO). For each product, provide: 1) Product title, 2) Direct product URL, 3) Price in rupees if available, 4) Brief description. Format as a numbered list with clear product entries.`;
   }
   
-  const config = RETAILER_CONFIG[retailer as keyof typeof RETAILER_CONFIG];
-  if (config) {
-    // Retailer-specific optimized query
-    return `${sanitizedQuery} ${config.searchHints} ${config.name} India product buy online price`;
-  }
-  
-  return `${sanitizedQuery} buy online India`;
+  const domainFilter = retailerDomains[retailer as keyof typeof retailerDomains];
+  return `Find "${sanitizedQuery}" products specifically on ${domainFilter}. For each product, provide: 1) Product title, 2) Direct product URL, 3) Price in rupees if available, 4) Brief description. Format as a numbered list with clear product entries.`;
 }
 
-// Search with retry logic for better reliability
-async function searchWithRetry(query: string, maxRetries: number): Promise<any> {
-  let lastError: Error | null = null;
-  
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`🔄 Search attempt ${attempt}/${maxRetries}`);
-      
-      const response = await fetch(PERPLEXITY_SEARCH_API, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          query: query,
-          max_results: 25, // Get more results for better filtering
-          return_images: true,
-          return_snippets: true,
-          country: 'IN'
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.text();
-        console.error(`❌ Perplexity API Error ${response.status}:`, errorData);
-        throw new Error(`Perplexity API Error: ${response.status}`);
-      }
-
-      const data = await response.json();
-      console.log(`✅ Search successful on attempt ${attempt}`);
-      return data;
-      
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error('Unknown error');
-      console.error(`⚠️ Attempt ${attempt} failed:`, lastError.message);
-      
-      if (attempt < maxRetries) {
-        // Exponential backoff
-        const delay = Math.pow(2, attempt) * 500;
-        console.log(`⏳ Waiting ${delay}ms before retry...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
+function getDomainFilter(retailer: string, retailerDomains: Record<string, string>): string[] {
+  if (retailer === 'all') {
+    return Object.values(retailerDomains);
   }
   
-  throw lastError || new Error('Search failed after retries');
+  const domain = retailerDomains[retailer as keyof typeof retailerDomains];
+  return domain ? [domain] : Object.values(retailerDomains);
 }
 
-// Process and rank results with quality scoring
-function processAndRankResults(
-  data: any,
-  originalQuery: string,
-  retailer: string,
-  limit: number
-): SearchResult[] {
-  if (!data.results || !Array.isArray(data.results)) {
-    console.log('⚠️ No results found in Search API response');
+function parseSearchResults(data: any, retailer: string, limit: number, retailerDomains: Record<string, string>): SearchResult[] {
+  if (!data.choices || data.choices.length === 0) {
     return [];
   }
 
+  const content = data.choices[0].message.content;
   const results: SearchResult[] = [];
-  const queryLower = originalQuery.toLowerCase();
-  const queryTerms = queryLower.split(/\s+/).filter(term => term.length > 2);
   
-  console.log(`📊 Processing ${data.results.length} raw results`);
-
-  for (const item of data.results) {
-    const url = item.url || '';
+  try {
+    const lines = content.split('\n').filter((line: string) => line.trim());
+    let currentProduct: Partial<SearchResult> = {};
     
-    // Check if URL matches our target retailers
-    const detectedRetailer = detectRetailer(url);
-    if (!detectedRetailer) {
-      continue; // Skip non-retailer results
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      
+      // Look for product titles (numbered list)
+      if (trimmedLine.match(/^\d+\./) && trimmedLine.length > 10) {
+        // Save previous product if complete
+        if (currentProduct.title && currentProduct.url) {
+          results.push(finalizeProduct(currentProduct));
+          if (results.length >= limit) break;
+        }
+        
+        // Start new product
+        currentProduct = {
+          title: cleanTitle(trimmedLine),
+          timestamp: Date.now()
+        };
+      }
+      
+      // Look for URLs
+      if (trimmedLine.includes('http') && (
+        trimmedLine.includes('amazon.in') || 
+        trimmedLine.includes('flipkart.com') || 
+        trimmedLine.includes('myntra.com') || 
+        trimmedLine.includes('ajio.com')
+      )) {
+        const urlMatch = trimmedLine.match(/(https?:\/\/[^\s]+)/);
+        if (urlMatch) {
+          currentProduct.url = cleanUrl(urlMatch[1]);
+          currentProduct.retailer = detectRetailer(currentProduct.url, retailerDomains);
+        }
+      }
+      
+      // Look for prices
+      const priceMatch = trimmedLine.match(/₹[\d,]+/);
+      if (priceMatch && !currentProduct.price) {
+        currentProduct.price = priceMatch[0];
+      }
+      
+      // Look for descriptions
+      if (!trimmedLine.includes('http') && 
+          !trimmedLine.match(/^\d+\./) && 
+          trimmedLine.length > 20 && 
+          !currentProduct.snippet) {
+        currentProduct.snippet = trimmedLine.substring(0, 150);
+      }
     }
     
-    // Filter by specific retailer if requested
-    if (retailer !== 'all' && detectedRetailer !== retailer) {
-      continue;
+    // Don't forget the last product
+    if (currentProduct.title && currentProduct.url && results.length < limit) {
+      results.push(finalizeProduct(currentProduct));
     }
     
-    const title = (item.title || 'Product').substring(0, 120);
-    const snippet = item.snippet ? item.snippet.substring(0, 200) : undefined;
-    const fullText = `${title} ${snippet || ''}`.toLowerCase();
-    
-    // Calculate relevance score
-    const relevanceScore = calculateRelevanceScore(
-      fullText,
-      queryTerms,
-      detectedRetailer,
-      retailer
-    );
-    
-    // Skip low-quality results
-    if (relevanceScore < 0.3) {
-      continue;
-    }
-    
-    // Extract and format price
-    const price = extractPrice(fullText, detectedRetailer);
-    
-    // Select best image
-    const image = selectBestImage(item.images);
-    
-    const result: SearchResult = {
-      id: generateId(url),
-      title: cleanTitle(title),
-      url: cleanUrl(url),
-      snippet,
-      price,
-      image,
-      retailer: detectedRetailer,
-      timestamp: Date.now(),
-      relevanceScore
-    };
-    
-    results.push(result);
+  } catch (error) {
+    console.error('Error parsing search results:', error);
   }
-  
-  // Sort by relevance score (highest first)
-  results.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
-  
-  console.log(`✨ Processed ${results.length} quality results`);
   
   return results.slice(0, limit);
 }
 
-// Calculate relevance score based on multiple factors
-function calculateRelevanceScore(
-  text: string,
-  queryTerms: string[],
-  detectedRetailer: string,
-  targetRetailer: string
-): number {
-  let score = 0;
-  
-  // Term matching score (0-0.5)
-  const matchedTerms = queryTerms.filter(term => text.includes(term));
-  score += (matchedTerms.length / queryTerms.length) * 0.5;
-  
-  // Exact phrase bonus (0-0.2)
-  const originalPhrase = queryTerms.join(' ');
-  if (text.includes(originalPhrase)) {
-    score += 0.2;
-  }
-  
-  // Retailer match bonus (0-0.2)
-  if (targetRetailer === 'all' || detectedRetailer === targetRetailer) {
-    score += 0.2;
-  }
-  
-  // Product indicators bonus (0-0.1)
-  const productIndicators = ['buy', 'price', '₹', 'mrp', 'offer', 'sale', 'product'];
-  const hasIndicators = productIndicators.some(indicator => text.includes(indicator));
-  if (hasIndicators) {
-    score += 0.1;
-  }
-  
-  return Math.min(score, 1.0);
-}
-
-// Improved price extraction with multiple patterns
-function extractPrice(text: string, retailer: string): string | undefined {
-  const config = RETAILER_CONFIG[retailer as keyof typeof RETAILER_CONFIG];
-  
-  // Try multiple price patterns
-  const patterns = [
-    /₹\s*[\d,]+(?:\.\d{2})?/,           // ₹1,999 or ₹1,999.00
-    /(?:MRP|Price|Rs\.?)\s*₹?\s*[\d,]+/, // MRP ₹1999 or Price 1999
-    /₹[\d,]+\s*onwards?/i,               // ₹999 onwards
-    /(?:from|starting)\s*₹?\s*[\d,]+/i   // from ₹999
-  ];
-  
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match) {
-      let price = match[0];
-      
-      // Clean up the price string
-      price = price.replace(/(?:MRP|Price|Rs\.?|from|starting|onwards?)/gi, '')
-                   .trim();
-      
-      // Ensure it starts with ₹
-      if (!price.startsWith('₹')) {
-        price = '₹' + price;
-      }
-      
-      return price;
-    }
-  }
-  
-  return undefined;
-}
-
-// Select best quality image from available images
-function selectBestImage(images: string[] | undefined): string | undefined {
-  if (!images || images.length === 0) {
-    return undefined;
-  }
-  
-  // Prefer product images over generic ones
-  const productImages = images.filter(img => 
-    !img.includes('logo') && 
-    !img.includes('icon') &&
-    !img.includes('favicon')
-  );
-  
-  return productImages[0] || images[0];
-}
-
-// Detect retailer from URL
-function detectRetailer(url: string): string | null {
-  try {
-    const hostname = new URL(url).hostname.toLowerCase();
-    
-    for (const [retailer, config] of Object.entries(RETAILER_CONFIG)) {
-      if (hostname.includes(config.domain)) {
-        return retailer;
-      }
-    }
-    
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-// Clean and format product title
 function cleanTitle(title: string): string {
   return title
-    .replace(/^\d+\.\s*/, '')           // Remove list numbers
-    .replace(/^[-*]\s*/, '')            // Remove bullet points
-    .replace(/\s+/g, ' ')               // Normalize whitespace
+    .replace(/^\d+\.\s*/, '')
+    .replace(/^[-*]\s*/, '')
     .trim()
     .substring(0, 120);
 }
 
-// Clean URL by removing tracking parameters
 function cleanUrl(url: string): string {
   try {
     const urlObj = new URL(url);
-    
-    // Keep only essential parameters
-    const keepParams = ['dp', 'pid', 'id', 'productId', 'skuId'];
+    // Remove tracking parameters but keep essential ones
+    const keepParams = ['dp', 'pid', 'id', 'productId'];
     const newSearchParams = new URLSearchParams();
     
     keepParams.forEach(param => {
@@ -405,7 +248,35 @@ function cleanUrl(url: string): string {
   }
 }
 
-// Generate unique ID from URL
+function detectRetailer(url: string, retailerDomains: Record<string, string>): string {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    
+    for (const [retailer, domain] of Object.entries(retailerDomains)) {
+      if (hostname.includes(domain)) {
+        return retailer;
+      }
+    }
+    
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+function finalizeProduct(product: Partial<SearchResult>): SearchResult {
+  return {
+    id: generateId(product.url || ''),
+    title: product.title || 'Product',
+    url: product.url || '',
+    snippet: product.snippet,
+    price: product.price,
+    image: product.image,
+    retailer: product.retailer || 'unknown',
+    timestamp: product.timestamp || Date.now()
+  };
+}
+
 function generateId(url: string): string {
   let hash = 0;
   for (let i = 0; i < url.length; i++) {
