@@ -230,24 +230,38 @@ function cleanTitle(title: string): string {
 
 function cleanUrl(url: string): string {
   try {
-    const urlObj = new URL(url);
-    
-    // For Amazon, keep only the path (contains /dp/PRODUCTID) and remove all query params
+    // Strip common trailing punctuation sometimes introduced by formatting
+    const sanitized = url.trim().replace(/[)\]>,\.;]+$/g, '');
+    const urlObj = new URL(sanitized);
+
+    // Canonicalize Amazon product URLs to https://www.amazon.in/dp/ASIN with no params/hash
     if (urlObj.hostname.includes('amazon')) {
+      urlObj.hostname = 'www.amazon.in';
+
+      // Extract ASIN from various Amazon URL formats
+      const asinMatch =
+        urlObj.pathname.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/i) ||
+        urlObj.pathname.match(/\/([A-Z0-9]{10})(?:[/?]|$)/i);
+
+      const asin = asinMatch ? asinMatch[1].toUpperCase() : null;
+
       urlObj.search = '';
+      urlObj.hash = '';
+      urlObj.pathname = asin ? `/dp/${asin}` : urlObj.pathname.replace(/[)]+$/, '');
+
       return urlObj.toString();
     }
-    
-    // For other retailers, keep essential params
+
+    // For other retailers, keep only essential params
     const keepParams = ['pid', 'id', 'productId'];
     const newSearchParams = new URLSearchParams();
-    
-    keepParams.forEach(param => {
+
+    keepParams.forEach((param) => {
       if (urlObj.searchParams.has(param)) {
         newSearchParams.set(param, urlObj.searchParams.get(param)!);
       }
     });
-    
+
     urlObj.search = newSearchParams.toString();
     return urlObj.toString();
   } catch {
