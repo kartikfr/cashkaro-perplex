@@ -32,12 +32,12 @@ serve(async (req) => {
 
     // Map retailer names to CashKaro store URLs
     const storeUrls: Record<string, string> = {
-      'amazon': 'https://cashkaro.com/amazon-coupons',
-      'flipkart': 'https://cashkaro.com/flipkart-coupons',
-      'myntra': 'https://cashkaro.com/myntra-coupons',
-      'ajio': 'https://cashkaro.com/ajio-coupons',
-      'nykaa': 'https://cashkaro.com/nykaa-coupons',
-      'tatacliq': 'https://cashkaro.com/tatacliq-coupons',
+      'amazon': 'https://cashkaro.com/amazon',
+      'flipkart': 'https://cashkaro.com/flipkart',
+      'myntra': 'https://cashkaro.com/myntra',
+      'ajio': 'https://cashkaro.com/ajio',
+      'nykaa': 'https://cashkaro.com/nykaa',
+      'tatacliq': 'https://cashkaro.com/tatacliq',
     };
 
     const storeUrl = storeUrls[retailer.toLowerCase()];
@@ -155,12 +155,23 @@ serve(async (req) => {
       });
     });
 
-    // If no parameters found, use fallback values
+    // If no parameters found, use fallback values based on retailer
     if (!params.cashKaroId && !params.sourceId && !params.trackingId) {
-      console.log('No parameters found, using fallback values');
-      params.cashKaroId = 'ck_' + retailer.toLowerCase();
-      params.sourceId = 'web';
-      params.trackingId = Date.now().toString();
+      console.log('No parameters found in HTML, using fallback values');
+      
+      // Use retailer-specific fallback parameters
+      const fallbackParams: Record<string, any> = {
+        amazon: { cashKaroId: 'ck_amazon', sourceId: 'cashkaro', affid: 'cashkaro-21' },
+        flipkart: { cashKaroId: 'ck_flipkart', sourceId: 'cashkaro', affid: 'cashkaro' },
+        myntra: { cashKaroId: 'ck_myntra', sourceId: 'cashkaro', affid: 'cashkaro_myntra' },
+        ajio: { cashKaroId: 'ck_ajio', sourceId: 'cashkaro', affid: 'cashkaro_ajio' },
+        nykaa: { cashKaroId: 'ck_nykaa', sourceId: 'cashkaro', affid: 'cashkaro_nykaa' },
+        tatacliq: { cashKaroId: 'ck_tatacliq', sourceId: 'cashkaro', affid: 'cashkaro_tatacliq' }
+      };
+      
+      const retailerParams = fallbackParams[retailer.toLowerCase()] || {};
+      Object.assign(params, retailerParams);
+      params.trackingId = `${retailer}_${Date.now()}`;
     }
 
     console.log(`Extracted parameters for ${retailer}:`, params);

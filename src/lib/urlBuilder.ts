@@ -42,8 +42,8 @@ class URLBuilder {
       return url.toString();
     } catch (error) {
       console.error('URL building error:', error);
-      // Return original URL as fallback
-      return validatedInput.productUrl;
+      // Always return a valid string, never a Promise
+      return this.normalizeRetailerUrl(validatedInput.productUrl);
     }
   }
 

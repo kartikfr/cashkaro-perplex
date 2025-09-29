@@ -155,8 +155,17 @@ const SearchInterface: React.FC = () => {
   // Handle product click with CashKaro URL building
   const handleProductClick = async (result: SearchResult) => {
     try {
+      console.log('Handling product click for:', result.title);
+      
       // Build final URL with CashKaro parameters
       const finalUrl = await urlBuilder.buildFinalUrl(result.url, result.retailer);
+      
+      console.log('Final URL built:', finalUrl);
+      
+      // Ensure we have a valid URL string
+      if (typeof finalUrl !== 'string' || finalUrl.includes('[object Promise]')) {
+        throw new Error('Invalid URL generated');
+      }
       
       // Validate CashKaro parameters were added
       const isValid = urlBuilder.validateCKParams(finalUrl, result.retailer);
@@ -175,11 +184,13 @@ const SearchInterface: React.FC = () => {
       }
       
       // Open in new tab
+      console.log('Opening URL:', finalUrl);
       window.open(finalUrl, '_blank');
       
     } catch (error) {
       console.error('Error building URL:', error);
       // Fallback to original URL
+      console.log('Using fallback URL:', result.url);
       window.open(result.url, '_blank');
       
       toast({
