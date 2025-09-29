@@ -6,6 +6,7 @@ const corsHeaders = {
 }
 
 const PERPLEXITY_API_KEY = Deno.env.get('PERPLEXITY_API_KEY');
+const PERPLEXITY_SEARCH_API = 'https://api.perplexity.ai/search';
 
 interface SearchRequest {
   query: string;
@@ -50,38 +51,24 @@ serve(async (req) => {
       ajio: 'ajio.com'
     };
 
-    // Build search prompt
-    const searchPrompt = buildSearchPrompt(query, retailer, retailerDomains);
+    // Build search query
+    const searchQuery = buildSearchQuery(query, retailer, retailerDomains);
     const domainFilter = getDomainFilter(retailer, retailerDomains);
 
-    // Call Perplexity API
-    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+    // Call Perplexity Search API
+    const response = await fetch(PERPLEXITY_SEARCH_API, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'sonar',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a product search assistant for Indian e-commerce. Return product information in a structured format with title, URL, price (in ₹ if available), and brief description. Focus on Indian e-commerce sites. Format your response as a clear numbered list with each product on separate lines.'
-          },
-          {
-            role: 'user',
-            content: searchPrompt
-          }
-        ],
-        temperature: 0.2,
-        top_p: 0.9,
-        max_tokens: 1000,
-        return_images: false,
-        return_related_questions: false,
-        search_domain_filter: domainFilter,
-        search_recency_filter: 'month',
-        frequency_penalty: 1,
-        presence_penalty: 0
+        query: searchQuery,
+        max_results: limit * 2, // Get more results to filter
+        return_images: true,
+        return_snippets: true,
+        country: 'IN', // Focus on Indian results
+        search_domain_filter: domainFilter
       }),
     });
 
@@ -92,10 +79,10 @@ serve(async (req) => {
     }
 
     const data = await response.json();
-    console.log('Perplexity response received');
+    console.log('Perplexity Search API response received');
 
-    // Parse search results
-    const results = parseSearchResults(data, retailer, limit, retailerDomains);
+    // Process search results from Perplexity Search API
+    const results = processSearchResults(data, retailer, limit, retailerDomains);
     
     console.log(`Returning ${results.length} results`);
 
@@ -129,15 +116,15 @@ serve(async (req) => {
   }
 });
 
-function buildSearchPrompt(query: string, retailer: string, retailerDomains: Record<string, string>): string {
+function buildSearchQuery(query: string, retailer: string, retailerDomains: Record<string, string>): string {
   const sanitizedQuery = query.trim();
   
   if (retailer === 'all') {
-    return `Find "${sanitizedQuery}" products on Indian e-commerce websites (Amazon.in, Flipkart, Myntra, AJIO). For each product, provide: 1) Product title, 2) Direct product URL, 3) Price in rupees if available, 4) Brief description. Format as a numbered list with clear product entries.`;
+    return `${sanitizedQuery} products buy online India`;
   }
   
-  const domainFilter = retailerDomains[retailer as keyof typeof retailerDomains];
-  return `Find "${sanitizedQuery}" products specifically on ${domainFilter}. For each product, provide: 1) Product title, 2) Direct product URL, 3) Price in rupees if available, 4) Brief description. Format as a numbered list with clear product entries.`;
+  const retailerName = retailer.charAt(0).toUpperCase() + retailer.slice(1);
+  return `${sanitizedQuery} products on ${retailerName} India`;
 }
 
 function getDomainFilter(retailer: string, retailerDomains: Record<string, string>): string[] {
@@ -149,83 +136,61 @@ function getDomainFilter(retailer: string, retailerDomains: Record<string, strin
   return domain ? [domain] : Object.values(retailerDomains);
 }
 
-function parseSearchResults(data: any, retailer: string, limit: number, retailerDomains: Record<string, string>): SearchResult[] {
-  if (!data.choices || data.choices.length === 0) {
+function processSearchResults(data: any, retailer: string, limit: number, retailerDomains: Record<string, string>): SearchResult[] {
+  if (!data.results || !Array.isArray(data.results)) {
+    console.log('No results found in Search API response');
     return [];
   }
 
-  const content = data.choices[0].message.content;
   const results: SearchResult[] = [];
   
   try {
-    const lines = content.split('\n').filter((line: string) => line.trim());
-    let currentProduct: Partial<SearchResult> = {};
-    
-    for (const line of lines) {
-      const trimmedLine = line.trim();
+    for (const item of data.results) {
+      // Check if URL matches our target retailers
+      const url = item.url || '';
+      const isRelevantRetailer = Object.values(retailerDomains).some(domain => 
+        url.includes(domain)
+      );
       
-      // Look for product titles (numbered list)
-      if (trimmedLine.match(/^\d+\./) && trimmedLine.length > 10) {
-        // Save previous product if complete
-        if (currentProduct.title && currentProduct.url) {
-          results.push(finalizeProduct(currentProduct));
-          if (results.length >= limit) break;
-        }
-        
-        // Start new product
-        currentProduct = {
-          title: cleanTitle(trimmedLine),
-          timestamp: Date.now()
-        };
+      if (!isRelevantRetailer) {
+        continue; // Skip non-retailer results
       }
       
-      // Look for URLs
-      if (trimmedLine.includes('http') && (
-        trimmedLine.includes('amazon.in') || 
-        trimmedLine.includes('flipkart.com') || 
-        trimmedLine.includes('myntra.com') || 
-        trimmedLine.includes('ajio.com')
-      )) {
-        const urlMatch = trimmedLine.match(/(https?:\/\/[^\s]+)/);
-        if (urlMatch) {
-          currentProduct.url = cleanUrl(urlMatch[1]);
-          currentProduct.retailer = detectRetailer(currentProduct.url, retailerDomains);
-        }
+      const detectedRetailer = detectRetailer(url, retailerDomains);
+      
+      // If filtering by specific retailer, only include matching results
+      if (retailer !== 'all' && detectedRetailer !== retailer) {
+        continue;
       }
       
-      // Look for prices
-      const priceMatch = trimmedLine.match(/₹[\d,]+/);
-      if (priceMatch && !currentProduct.price) {
-        currentProduct.price = priceMatch[0];
-      }
+      const result: SearchResult = {
+        id: generateId(url),
+        title: (item.title || 'Product').substring(0, 120),
+        url: cleanUrl(url),
+        snippet: item.snippet ? item.snippet.substring(0, 150) : undefined,
+        price: extractPrice(item.snippet || ''),
+        image: item.images && item.images.length > 0 ? item.images[0] : undefined,
+        retailer: detectedRetailer,
+        timestamp: Date.now()
+      };
       
-      // Look for descriptions
-      if (!trimmedLine.includes('http') && 
-          !trimmedLine.match(/^\d+\./) && 
-          trimmedLine.length > 20 && 
-          !currentProduct.snippet) {
-        currentProduct.snippet = trimmedLine.substring(0, 150);
+      results.push(result);
+      
+      if (results.length >= limit) {
+        break;
       }
-    }
-    
-    // Don't forget the last product
-    if (currentProduct.title && currentProduct.url && results.length < limit) {
-      results.push(finalizeProduct(currentProduct));
     }
     
   } catch (error) {
-    console.error('Error parsing search results:', error);
+    console.error('Error processing search results:', error);
   }
   
-  return results.slice(0, limit);
+  return results;
 }
 
-function cleanTitle(title: string): string {
-  return title
-    .replace(/^\d+\.\s*/, '')
-    .replace(/^[-*]\s*/, '')
-    .trim()
-    .substring(0, 120);
+function extractPrice(text: string): string | undefined {
+  const priceMatch = text.match(/₹[\d,]+/);
+  return priceMatch ? priceMatch[0] : undefined;
 }
 
 function cleanUrl(url: string): string {
