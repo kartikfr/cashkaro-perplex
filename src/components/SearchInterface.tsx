@@ -144,50 +144,30 @@ const SearchInterface: React.FC = () => {
     }
   };
 
-  // Handle product click with CashKaro URL building
+  // Handle product click - open the exact product URL (no extra params)
   const handleProductClick = async (result: SearchResult) => {
     try {
       console.log('Handling product click for:', result.title);
-      
-      // Build final URL with CashKaro parameters
-      const finalUrl = await urlBuilder.buildFinalUrl(result.url, result.retailer);
-      
-      console.log('Final URL built:', finalUrl);
-      
-      // Ensure we have a valid URL string
-      if (typeof finalUrl !== 'string' || finalUrl.includes('[object Promise]')) {
-        throw new Error('Invalid URL generated');
-      }
-      
-      // Validate CashKaro parameters were added
-      const isValid = urlBuilder.validateCKParams(finalUrl, result.retailer);
-      
-      if (isValid) {
-        toast({
-          title: "Redirecting with CashKaro",
-          description: `Opening ${result.title} with cashback tracking...`,
-        });
-      } else {
-        toast({
-          title: "Redirecting",
-          description: `Opening ${result.title} (cashback params may not be available)...`,
-          variant: "destructive",
-        });
-      }
-      
-      // Open in new tab
-      console.log('Opening URL:', finalUrl);
+
+      // Normalize but do not append any tracking params
+      const finalUrl = urlBuilder.normalizeRetailerUrl(result.url);
+
+      console.log('Opening product URL:', finalUrl);
+
+      toast({
+        title: "Opening product",
+        description: `Redirecting to ${result.title}`,
+      });
+
       window.open(finalUrl, '_blank');
-      
+
     } catch (error) {
-      console.error('Error building URL:', error);
+      console.error('Error opening product URL:', error);
       // Fallback to original URL
-      console.log('Using fallback URL:', result.url);
       window.open(result.url, '_blank');
-      
       toast({
         title: "Redirecting",
-        description: "Opened product page (fallback mode)",
+        description: "Opened original product link",
         variant: "destructive",
       });
     }
