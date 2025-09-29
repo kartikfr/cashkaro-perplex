@@ -23,7 +23,35 @@ interface SearchResult {
   image?: string;
   retailer: string;
   timestamp: number;
+  relevanceScore?: number;
 }
+
+const RETAILER_CONFIG = {
+  amazon: {
+    domain: 'amazon.in',
+    name: 'Amazon India',
+    searchHints: 'Amazon.in online shopping',
+    priceIndicators: ['₹', 'MRP', 'Price']
+  },
+  flipkart: {
+    domain: 'flipkart.com',
+    name: 'Flipkart',
+    searchHints: 'Flipkart online store',
+    priceIndicators: ['₹', 'Price']
+  },
+  myntra: {
+    domain: 'myntra.com',
+    name: 'Myntra',
+    searchHints: 'Myntra fashion store',
+    priceIndicators: ['₹', 'MRP']
+  },
+  ajio: {
+    domain: 'ajio.com',
+    name: 'AJIO',
+    searchHints: 'AJIO fashion shopping',
+    priceIndicators: ['₹', 'Price']
+  }
+};
 
 serve(async (req) => {
   // Handle CORS preflight requests
@@ -42,50 +70,36 @@ serve(async (req) => {
       throw new Error('Perplexity API key not configured');
     }
 
-    console.log(`Searching for: "${query}" on ${retailer}`);
+    console.log(`🔍 Optimized search for: "${query}" on ${retailer}`);
 
-    const retailerDomains = {
-      amazon: 'amazon.in',
-      flipkart: 'flipkart.com',
-      myntra: 'myntra.com',
-      ajio: 'ajio.com'
-    };
+    // Build optimized search query
+    const searchQuery = buildOptimizedSearchQuery(query, retailer);
+    console.log(`📝 Search query: "${searchQuery}"`);
 
-    // Build search query
-    const searchQuery = buildSearchQuery(query, retailer, retailerDomains);
-
-    // Call Perplexity Search API (no domain filter - it's not supported)
-    const response = await fetch(PERPLEXITY_SEARCH_API, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        query: searchQuery,
-        max_results: 20, // Get more results to filter by retailer
-        return_images: true,
-        return_snippets: true,
-        country: 'IN' // Focus on Indian results
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error(`Perplexity API Error ${response.status}:`, errorData);
-      throw new Error(`Perplexity API Error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    console.log('Perplexity Search API response received');
-
-    // Process search results from Perplexity Search API
-    const results = processSearchResults(data, retailer, limit, retailerDomains);
+    // Call Perplexity Search API with retry logic
+    const searchResults = await searchWithRetry(searchQuery, 3);
     
-    console.log(`Returning ${results.length} results`);
+    // Process and rank results
+    const processedResults = processAndRankResults(
+      searchResults,
+      query,
+      retailer,
+      limit
+    );
+    
+    console.log(`✅ Returning ${processedResults.length} optimized results`);
 
     return new Response(
-      JSON.stringify({ results, query, retailer }),
+      JSON.stringify({ 
+        results: processedResults, 
+        query, 
+        retailer,
+        metadata: {
+          totalFound: searchResults.results?.length || 0,
+          filtered: processedResults.length,
+          searchQuery
+        }
+      }),
       { 
         headers: { 
           ...corsHeaders, 
@@ -95,7 +109,7 @@ serve(async (req) => {
     );
 
   } catch (error) {
-    console.error('Error in search-products function:', error);
+    console.error('❌ Error in search-products function:', error);
     
     return new Response(
       JSON.stringify({ 
@@ -114,80 +128,268 @@ serve(async (req) => {
   }
 });
 
-function buildSearchQuery(query: string, retailer: string, retailerDomains: Record<string, string>): string {
+// Build optimized search query with retailer-specific hints
+function buildOptimizedSearchQuery(query: string, retailer: string): string {
   const sanitizedQuery = query.trim();
   
   if (retailer === 'all') {
-    return `${sanitizedQuery} products buy online India`;
+    // Multi-retailer search with India-specific keywords
+    return `${sanitizedQuery} buy online India e-commerce shopping Amazon Flipkart Myntra AJIO product price`;
   }
   
-  const retailerName = retailer.charAt(0).toUpperCase() + retailer.slice(1);
-  return `${sanitizedQuery} products on ${retailerName} India`;
+  const config = RETAILER_CONFIG[retailer as keyof typeof RETAILER_CONFIG];
+  if (config) {
+    // Retailer-specific optimized query
+    return `${sanitizedQuery} ${config.searchHints} ${config.name} India product buy online price`;
+  }
+  
+  return `${sanitizedQuery} buy online India`;
 }
 
+// Search with retry logic for better reliability
+async function searchWithRetry(query: string, maxRetries: number): Promise<any> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`🔄 Search attempt ${attempt}/${maxRetries}`);
+      
+      const response = await fetch(PERPLEXITY_SEARCH_API, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: query,
+          max_results: 25, // Get more results for better filtering
+          return_images: true,
+          return_snippets: true,
+          country: 'IN'
+        }),
+      });
 
-function processSearchResults(data: any, retailer: string, limit: number, retailerDomains: Record<string, string>): SearchResult[] {
+      if (!response.ok) {
+        const errorData = await response.text();
+        console.error(`❌ Perplexity API Error ${response.status}:`, errorData);
+        throw new Error(`Perplexity API Error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log(`✅ Search successful on attempt ${attempt}`);
+      return data;
+      
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error('Unknown error');
+      console.error(`⚠️ Attempt ${attempt} failed:`, lastError.message);
+      
+      if (attempt < maxRetries) {
+        // Exponential backoff
+        const delay = Math.pow(2, attempt) * 500;
+        console.log(`⏳ Waiting ${delay}ms before retry...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+  
+  throw lastError || new Error('Search failed after retries');
+}
+
+// Process and rank results with quality scoring
+function processAndRankResults(
+  data: any,
+  originalQuery: string,
+  retailer: string,
+  limit: number
+): SearchResult[] {
   if (!data.results || !Array.isArray(data.results)) {
-    console.log('No results found in Search API response');
+    console.log('⚠️ No results found in Search API response');
     return [];
   }
 
   const results: SearchResult[] = [];
+  const queryLower = originalQuery.toLowerCase();
+  const queryTerms = queryLower.split(/\s+/).filter(term => term.length > 2);
   
+  console.log(`📊 Processing ${data.results.length} raw results`);
+
+  for (const item of data.results) {
+    const url = item.url || '';
+    
+    // Check if URL matches our target retailers
+    const detectedRetailer = detectRetailer(url);
+    if (!detectedRetailer) {
+      continue; // Skip non-retailer results
+    }
+    
+    // Filter by specific retailer if requested
+    if (retailer !== 'all' && detectedRetailer !== retailer) {
+      continue;
+    }
+    
+    const title = (item.title || 'Product').substring(0, 120);
+    const snippet = item.snippet ? item.snippet.substring(0, 200) : undefined;
+    const fullText = `${title} ${snippet || ''}`.toLowerCase();
+    
+    // Calculate relevance score
+    const relevanceScore = calculateRelevanceScore(
+      fullText,
+      queryTerms,
+      detectedRetailer,
+      retailer
+    );
+    
+    // Skip low-quality results
+    if (relevanceScore < 0.3) {
+      continue;
+    }
+    
+    // Extract and format price
+    const price = extractPrice(fullText, detectedRetailer);
+    
+    // Select best image
+    const image = selectBestImage(item.images);
+    
+    const result: SearchResult = {
+      id: generateId(url),
+      title: cleanTitle(title),
+      url: cleanUrl(url),
+      snippet,
+      price,
+      image,
+      retailer: detectedRetailer,
+      timestamp: Date.now(),
+      relevanceScore
+    };
+    
+    results.push(result);
+  }
+  
+  // Sort by relevance score (highest first)
+  results.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
+  
+  console.log(`✨ Processed ${results.length} quality results`);
+  
+  return results.slice(0, limit);
+}
+
+// Calculate relevance score based on multiple factors
+function calculateRelevanceScore(
+  text: string,
+  queryTerms: string[],
+  detectedRetailer: string,
+  targetRetailer: string
+): number {
+  let score = 0;
+  
+  // Term matching score (0-0.5)
+  const matchedTerms = queryTerms.filter(term => text.includes(term));
+  score += (matchedTerms.length / queryTerms.length) * 0.5;
+  
+  // Exact phrase bonus (0-0.2)
+  const originalPhrase = queryTerms.join(' ');
+  if (text.includes(originalPhrase)) {
+    score += 0.2;
+  }
+  
+  // Retailer match bonus (0-0.2)
+  if (targetRetailer === 'all' || detectedRetailer === targetRetailer) {
+    score += 0.2;
+  }
+  
+  // Product indicators bonus (0-0.1)
+  const productIndicators = ['buy', 'price', '₹', 'mrp', 'offer', 'sale', 'product'];
+  const hasIndicators = productIndicators.some(indicator => text.includes(indicator));
+  if (hasIndicators) {
+    score += 0.1;
+  }
+  
+  return Math.min(score, 1.0);
+}
+
+// Improved price extraction with multiple patterns
+function extractPrice(text: string, retailer: string): string | undefined {
+  const config = RETAILER_CONFIG[retailer as keyof typeof RETAILER_CONFIG];
+  
+  // Try multiple price patterns
+  const patterns = [
+    /₹\s*[\d,]+(?:\.\d{2})?/,           // ₹1,999 or ₹1,999.00
+    /(?:MRP|Price|Rs\.?)\s*₹?\s*[\d,]+/, // MRP ₹1999 or Price 1999
+    /₹[\d,]+\s*onwards?/i,               // ₹999 onwards
+    /(?:from|starting)\s*₹?\s*[\d,]+/i   // from ₹999
+  ];
+  
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      let price = match[0];
+      
+      // Clean up the price string
+      price = price.replace(/(?:MRP|Price|Rs\.?|from|starting|onwards?)/gi, '')
+                   .trim();
+      
+      // Ensure it starts with ₹
+      if (!price.startsWith('₹')) {
+        price = '₹' + price;
+      }
+      
+      return price;
+    }
+  }
+  
+  return undefined;
+}
+
+// Select best quality image from available images
+function selectBestImage(images: string[] | undefined): string | undefined {
+  if (!images || images.length === 0) {
+    return undefined;
+  }
+  
+  // Prefer product images over generic ones
+  const productImages = images.filter(img => 
+    !img.includes('logo') && 
+    !img.includes('icon') &&
+    !img.includes('favicon')
+  );
+  
+  return productImages[0] || images[0];
+}
+
+// Detect retailer from URL
+function detectRetailer(url: string): string | null {
   try {
-    for (const item of data.results) {
-      // Check if URL matches our target retailers
-      const url = item.url || '';
-      const isRelevantRetailer = Object.values(retailerDomains).some(domain => 
-        url.includes(domain)
-      );
-      
-      if (!isRelevantRetailer) {
-        continue; // Skip non-retailer results
-      }
-      
-      const detectedRetailer = detectRetailer(url, retailerDomains);
-      
-      // If filtering by specific retailer, only include matching results
-      if (retailer !== 'all' && detectedRetailer !== retailer) {
-        continue;
-      }
-      
-      const result: SearchResult = {
-        id: generateId(url),
-        title: (item.title || 'Product').substring(0, 120),
-        url: cleanUrl(url),
-        snippet: item.snippet ? item.snippet.substring(0, 150) : undefined,
-        price: extractPrice(item.snippet || ''),
-        image: item.images && item.images.length > 0 ? item.images[0] : undefined,
-        retailer: detectedRetailer,
-        timestamp: Date.now()
-      };
-      
-      results.push(result);
-      
-      if (results.length >= limit) {
-        break;
+    const hostname = new URL(url).hostname.toLowerCase();
+    
+    for (const [retailer, config] of Object.entries(RETAILER_CONFIG)) {
+      if (hostname.includes(config.domain)) {
+        return retailer;
       }
     }
     
-  } catch (error) {
-    console.error('Error processing search results:', error);
+    return null;
+  } catch {
+    return null;
   }
-  
-  return results;
 }
 
-function extractPrice(text: string): string | undefined {
-  const priceMatch = text.match(/₹[\d,]+/);
-  return priceMatch ? priceMatch[0] : undefined;
+// Clean and format product title
+function cleanTitle(title: string): string {
+  return title
+    .replace(/^\d+\.\s*/, '')           // Remove list numbers
+    .replace(/^[-*]\s*/, '')            // Remove bullet points
+    .replace(/\s+/g, ' ')               // Normalize whitespace
+    .trim()
+    .substring(0, 120);
 }
 
+// Clean URL by removing tracking parameters
 function cleanUrl(url: string): string {
   try {
     const urlObj = new URL(url);
-    // Remove tracking parameters but keep essential ones
-    const keepParams = ['dp', 'pid', 'id', 'productId'];
+    
+    // Keep only essential parameters
+    const keepParams = ['dp', 'pid', 'id', 'productId', 'skuId'];
     const newSearchParams = new URLSearchParams();
     
     keepParams.forEach(param => {
@@ -203,35 +405,7 @@ function cleanUrl(url: string): string {
   }
 }
 
-function detectRetailer(url: string, retailerDomains: Record<string, string>): string {
-  try {
-    const hostname = new URL(url).hostname.toLowerCase();
-    
-    for (const [retailer, domain] of Object.entries(retailerDomains)) {
-      if (hostname.includes(domain)) {
-        return retailer;
-      }
-    }
-    
-    return 'unknown';
-  } catch {
-    return 'unknown';
-  }
-}
-
-function finalizeProduct(product: Partial<SearchResult>): SearchResult {
-  return {
-    id: generateId(product.url || ''),
-    title: product.title || 'Product',
-    url: product.url || '',
-    snippet: product.snippet,
-    price: product.price,
-    image: product.image,
-    retailer: product.retailer || 'unknown',
-    timestamp: product.timestamp || Date.now()
-  };
-}
-
+// Generate unique ID from URL
 function generateId(url: string): string {
   let hash = 0;
   for (let i = 0; i < url.length; i++) {
