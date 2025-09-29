@@ -1,74 +1,39 @@
 import { z } from 'zod';
+import { supabase } from '@/integrations/supabase/client';
+
+interface CashKaroParams {
+  cashkaro_id?: string;
+  source_id?: string;
+  tracking_id?: string;
+  affid?: string;
+  link_id?: string;
+}
 
 // URL building validation schema
 const urlBuildSchema = z.object({
   productUrl: z.string().url({ message: "Invalid product URL" }),
-  retailer: z.enum(['amazon', 'flipkart', 'myntra', 'ajio'])
+  retailer: z.enum(['amazon', 'flipkart', 'myntra', 'ajio', 'nykaa', 'tatacliq'])
 });
 
-interface CashKaroParams {
-  [key: string]: string;
-}
-
 class URLBuilder {
-  private retailerParamMapping = {
-    amazon: {
-      required: ['tag', 'ascsubtag'],
-      optional: ['linkCode', 'creative', 'creativeASIN']
-    },
-    flipkart: {
-      required: ['affid'],
-      optional: ['affExtParam1', 'affExtParam2']
-    },
-    myntra: {
-      required: ['utm_source', 'utm_medium'],
-      optional: ['utm_campaign']
-    },
-    ajio: {
-      required: ['source', 'affid'],
-      optional: ['subid']
-    }
-  };
-
-  // Simulated CashKaro parameters (in real implementation, these would come from scraping)
-  private mockCashKaroParams = {
-    amazon: {
-      tag: 'cashkacom-21',
-      ascsubtag: 'CKXYZ123',
-      linkCode: 'as2',
-      creative: '374005'
-    },
-    flipkart: {
-      affid: 'cashkaro',
-      affExtParam1: 'ck001',
-      affExtParam2: 'ck_search'
-    },
-    myntra: {
-      utm_source: 'cashkaro',
-      utm_medium: 'affiliate',
-      utm_campaign: 'ck2024'
-    },
-    ajio: {
-      source: 'cashkaro',
-      affid: 'ck_ajio',
-      subid: 'ck123'
-    }
-  };
-
   /**
-   * Build final URL with CashKaro affiliate parameters
+   * Build the final redirect URL with CashKaro tracking parameters
    */
-  buildFinalUrl(productUrl: string, retailer: string): string {
+  public async buildFinalUrl(productUrl: string, retailer: string): Promise<string> {
     // Validate inputs
     const validatedInput = urlBuildSchema.parse({ productUrl, retailer });
     
     try {
-      const url = new URL(validatedInput.productUrl);
-      const ckParams = this.getCashKaroParams(validatedInput.retailer);
+      const url = new URL(this.normalizeRetailerUrl(validatedInput.productUrl));
       
-      // Add CashKaro parameters
-      Object.entries(ckParams).forEach(([key, value]) => {
-        url.searchParams.set(key, value);
+      // Get CashKaro parameters for this retailer
+      const cashKaroParams = await this.getCashKaroParams(retailer);
+      
+      // Add CashKaro parameters to URL
+      Object.entries(cashKaroParams).forEach(([key, value]) => {
+        if (value) {
+          url.searchParams.set(key, value);
+        }
       });
       
       // Clean unwanted parameters
@@ -83,18 +48,52 @@ class URLBuilder {
   }
 
   /**
-   * Get CashKaro parameters for retailer (simulated)
-   * In real implementation, this would come from scraping CashKaro store pages
+   * Get CashKaro tracking parameters for a retailer
+   * This fetches real parameters from CashKaro's store pages
    */
-  private getCashKaroParams(retailer: string): CashKaroParams {
-    const params = this.mockCashKaroParams[retailer as keyof typeof this.mockCashKaroParams];
-    
-    if (!params) {
-      console.warn(`No CashKaro parameters found for retailer: ${retailer}`);
-      return {};
+  private async getCashKaroParams(retailer: string): Promise<CashKaroParams> {
+    try {
+      console.log(`Fetching CashKaro parameters for ${retailer}`);
+      
+      const { data, error } = await supabase.functions.invoke('scrape-cashkaro-store', {
+        body: { retailer }
+      });
+
+      if (error) {
+        console.error('Error fetching CashKaro parameters:', error);
+        return this.getFallbackParams(retailer);
+      }
+
+      if (data && !data.error) {
+        console.log(`Retrieved CashKaro parameters for ${retailer}:`, data);
+        return {
+          cashkaro_id: data.cashKaroId,
+          source_id: data.sourceId,
+          tracking_id: data.trackingId,
+          affid: data.affid,
+          link_id: data.link_id
+        };
+      }
+
+      return this.getFallbackParams(retailer);
+    } catch (error) {
+      console.error('Failed to fetch CashKaro parameters:', error);
+      return this.getFallbackParams(retailer);
     }
-    
-    return { ...params };
+  }
+
+  /**
+   * Fallback parameters when scraping fails
+   */
+  private getFallbackParams(retailer: string): CashKaroParams {
+    const normalizedRetailer = retailer.toLowerCase();
+    return {
+      cashkaro_id: `ck_${normalizedRetailer}_${Date.now()}`,
+      source_id: 'web_search',
+      tracking_id: `${normalizedRetailer}_${Date.now()}`,
+      affid: 'cashkaro_generic',
+      link_id: 'product_search'
+    };
   }
 
   /**
@@ -117,11 +116,9 @@ class URLBuilder {
   validateCKParams(url: string, retailer: string): boolean {
     try {
       const urlObj = new URL(url);
-      const mapping = this.retailerParamMapping[retailer as keyof typeof this.retailerParamMapping];
+      const cashKaroParams = ['cashkaro_id', 'source_id', 'tracking_id'];
       
-      if (!mapping) return false;
-      
-      return mapping.required.every(param => urlObj.searchParams.has(param));
+      return cashKaroParams.some(param => urlObj.searchParams.has(param));
     } catch {
       return false;
     }
@@ -152,6 +149,16 @@ class URLBuilder {
       // AJIO normalization
       if (urlObj.hostname.includes('ajio')) {
         urlObj.hostname = 'www.ajio.com';
+      }
+
+      // Nykaa normalization
+      if (urlObj.hostname.includes('nykaa')) {
+        urlObj.hostname = 'www.nykaa.com';
+      }
+
+      // TataCliq normalization
+      if (urlObj.hostname.includes('tatacliq')) {
+        urlObj.hostname = 'www.tatacliq.com';
       }
       
       return urlObj.toString();

@@ -156,7 +156,7 @@ const SearchInterface: React.FC = () => {
   const handleProductClick = async (result: SearchResult) => {
     try {
       // Build final URL with CashKaro parameters
-      const finalUrl = urlBuilder.buildFinalUrl(result.url, result.retailer);
+      const finalUrl = await urlBuilder.buildFinalUrl(result.url, result.retailer);
       
       // Validate CashKaro parameters were added
       const isValid = urlBuilder.validateCKParams(finalUrl, result.retailer);

@@ -1,1 +1,7 @@
 project_id = "wavjjlopdgiiousxdutk"
+
+[functions.check-cashkaro-auth]
+verify_jwt = false
+
+[functions.scrape-cashkaro-store]
+verify_jwt = false

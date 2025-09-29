@@ -1,7 +1,7 @@
 import React from 'react';
 import { Search, Settings, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { CashKaroStatus } from './CashKaroStatus';
 
 const Header: React.FC = () => {
   return (
@@ -21,10 +21,7 @@ const Header: React.FC = () => {
 
           {/* Status & Actions */}
           <div className="flex items-center gap-4">
-            <Badge variant="outline" className="text-xs">
-              <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
-              Connected to CashKaro
-            </Badge>
+            <CashKaroStatus />
             
             <div className="flex items-center gap-2">
               <Button variant="ghost" size="icon">
