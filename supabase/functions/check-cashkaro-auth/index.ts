@@ -34,30 +34,75 @@ serve(async (req) => {
     const html = await response.text();
     console.log('Retrieved CashKaro page, checking authentication status');
 
-    // Check for common authentication indicators
-    const isSignedIn = html.includes('logout') || 
-                      html.includes('account') || 
-                      html.includes('profile') ||
-                      html.includes('dashboard') ||
-                      !html.includes('login');
+    // Check for specific authentication indicators - more precise detection
+    const loggedInIndicators = [
+      /class[^>]*user-menu/i,
+      /class[^>]*user-profile/i,
+      /href[^>]*logout/i,
+      /href[^>]*\/logout/i,
+      /href[^>]*profile/i,
+      /data-user/i,
+      /Welcome[^<]*[A-Za-z]+/i  // Welcome with actual name
+    ];
+    
+    const loggedOutIndicators = [
+      /href[^>]*login/i,
+      /href[^>]*signin/i,
+      /href[^>]*register/i,
+      /href[^>]*signup/i,
+      /class[^>]*login-button/i,
+      /Sign.*In/i,
+      /Log.*In/i
+    ];
 
-    // Extract user info if available
+    let loggedInScore = 0;
+    let loggedOutScore = 0;
+
+    // Check for logged in indicators
+    loggedInIndicators.forEach(pattern => {
+      if (pattern.test(html)) {
+        loggedInScore++;
+      }
+    });
+
+    // Check for logged out indicators  
+    loggedOutIndicators.forEach(pattern => {
+      if (pattern.test(html)) {
+        loggedOutScore++;
+      }
+    });
+
+    // More stringent check - require clear logged in indicators and no logged out indicators
+    const isSignedIn = loggedInScore >= 2 && loggedOutScore === 0;
+
+    // Extract user info only if clearly signed in
     let userInfo = null;
     if (isSignedIn) {
-      // Try to extract user email or name from the page
+      // Look for more specific user information patterns
       const emailMatch = html.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-      const nameMatch = html.match(/Welcome\s+([^<]+)/i) || html.match(/Hi\s+([^<]+)/i);
+      const nameMatch = html.match(/Welcome\s+([^<,\s]+)/i) || 
+                       html.match(/Hi\s+([^<,\s]+)/i) ||
+                       html.match(/Hello\s+([^<,\s]+)/i);
       
-      userInfo = {
-        email: emailMatch ? emailMatch[0] : null,
-        name: nameMatch ? nameMatch[1].trim() : null,
-      };
+      // Only set user info if we find actual user data, not promotional content
+      if (emailMatch || (nameMatch && nameMatch[1].length < 50 && !nameMatch[1].includes('Rs.'))) {
+        userInfo = {
+          email: emailMatch ? emailMatch[0] : null,
+          name: nameMatch ? nameMatch[1].trim() : null,
+        };
+      }
     }
 
     const result = {
       isSignedIn,
       userInfo,
       timestamp: new Date().toISOString(),
+      debugInfo: {
+        loggedInScore,
+        loggedOutScore,
+        hasLoginButton: /href[^>]*login/i.test(html),
+        hasLogoutButton: /href[^>]*logout/i.test(html)
+      }
     };
 
     console.log('CashKaro auth check result:', result);
