@@ -32,27 +32,10 @@ interface SearchResponse {
   error?: string;
 }
 
-interface CacheEntry {
-  results: SearchResult[];
-  timestamp: number;
-}
-
 class SearchService {
-  private cache: Map<string, CacheEntry> = new Map();
-  private readonly CACHE_TTL = 3 * 60 * 1000; // 3 minutes
-
   async search(query: string, retailer: string = 'all', limit: number = 5): Promise<SearchResult[]> {
     // Validate inputs
     const validatedInput = searchQuerySchema.parse({ query, retailer, limit });
-    
-    // Check cache first
-    const cacheKey = `${validatedInput.query}|${validatedInput.retailer}|${validatedInput.limit}`;
-    const cached = this.cache.get(cacheKey);
-    
-    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
-      console.log('Returning cached results for:', validatedInput.query);
-      return cached.results;
-    }
     
     try {
       console.log(`Searching for: "${validatedInput.query}" on ${validatedInput.retailer}`);
@@ -78,18 +61,6 @@ class SearchService {
       }
 
       console.log(`Search completed: ${response.results.length} results found`);
-      
-      // Cache the results
-      if (response.results && response.results.length > 0) {
-        this.cache.set(cacheKey, {
-          results: response.results,
-          timestamp: Date.now()
-        });
-      }
-      
-      // Clean old cache entries
-      this.cleanCache();
-      
       return response.results || [];
       
     } catch (error) {
@@ -98,15 +69,6 @@ class SearchService {
         throw new Error(`Search failed: ${error.message}`);
       }
       throw new Error('Search failed with unknown error');
-    }
-  }
-
-  private cleanCache(): void {
-    const now = Date.now();
-    for (const [key, entry] of this.cache.entries()) {
-      if (now - entry.timestamp > this.CACHE_TTL) {
-        this.cache.delete(key);
-      }
     }
   }
 }
