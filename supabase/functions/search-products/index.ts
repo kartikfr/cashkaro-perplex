@@ -65,7 +65,7 @@ serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'sonar',
+        model: 'llama-3.1-sonar-small-128k-online',
         messages: [
           {
             role: 'system',
@@ -209,38 +209,30 @@ async function parseAndValidateResults(data: any, retailer: string, limit: numbe
         };
       }
       
-      // Look for URLs
-      if (trimmedLine.includes('http') && (
-        trimmedLine.includes('amazon.in') || 
-        trimmedLine.includes('flipkart.com') || 
-        trimmedLine.includes('myntra.com') || 
-        trimmedLine.includes('ajio.com')
-      )) {
-      // Look for URLs
-      if (trimmedLine.includes('http') && (
-        trimmedLine.includes('amazon.in') || 
-        trimmedLine.includes('flipkart.com') || 
-        trimmedLine.includes('myntra.com') || 
-        trimmedLine.includes('ajio.com')
-      )) {
-        const urlMatch = trimmedLine.match(/(https?:\/\/[^\s]+)/);
-        if (urlMatch) {
-          const cleanedUrl = cleanUrl(urlMatch[1]);
-          const detectedRetailer = detectRetailer(cleanedUrl, retailerDomains);
-          const confidence = validateRetailerUrl(cleanedUrl, detectedRetailer);
-          
-          console.log(`URL found: ${cleanedUrl} (retailer: ${detectedRetailer}, confidence: ${confidence})`);
-          
-          // Accept URLs with confidence >= 0.3 (lowered threshold)
-          if (confidence >= 0.3) {
-            currentProduct.url = cleanedUrl;
-            currentProduct.retailer = detectedRetailer;
-            currentProduct.confidence = confidence;
-          } else {
-            console.log(`URL rejected due to low confidence: ${confidence}`);
+      // Look for URLs (accept absolute, domain-only, or retailer-rooted paths)
+      const urlMatch = trimmedLine.match(new RegExp('(https?:\\/\\/[^\\s)]+|(?:www\\.)?(?:amazon\\.in|flipkart\\.com|myntra\\.com|ajio\\.com)[^\\s)]+|\\/(?:dp\\/[A-Z0-9]{8,12}|p\\/[^\\s)]+))','i'));
+      if (urlMatch) {
+        let candidate = urlMatch[0];
+        // Build absolute URL if needed
+        if (!/^https?:\/\//i.test(candidate)) {
+          if (candidate.startsWith('/')) {
+            const host = retailer !== 'all' ? retailerDomains[retailer as keyof typeof retailerDomains] : '';
+            if (host) candidate = `https://www.${host}${candidate}`;
+          } else if (/^(?:www\.)?(amazon\.in|flipkart\.com|myntra\.com|ajio\.com)/i.test(candidate)) {
+            candidate = candidate.startsWith('www.') ? `https://${candidate}` : `https://www.${candidate}`;
           }
         }
-      }
+        const cleanedUrl = cleanUrl(candidate);
+        const detectedRetailer = detectRetailer(cleanedUrl, retailerDomains);
+        const confidence = validateRetailerUrl(cleanedUrl, detectedRetailer);
+        console.log(`URL found: ${cleanedUrl} (retailer: ${detectedRetailer}, confidence: ${confidence})`);
+        if (confidence >= 0.3) {
+          currentProduct.url = cleanedUrl;
+          currentProduct.retailer = detectedRetailer;
+          (currentProduct as any).confidence = confidence;
+        } else {
+          console.log(`URL rejected due to low confidence: ${confidence}`);
+        }
       }
       
       // Look for prices
@@ -270,6 +262,35 @@ async function parseAndValidateResults(data: any, retailer: string, limit: numbe
     console.error('Error parsing search results:', error);
   }
   
+  // If nothing parsed, salvage any direct product-looking URLs from the full content
+  if (results.length === 0) {
+    const salvageRegex = /(https?:\/\/)?(?:www\.)?(amazon\.in\/dp\/[A-Z0-9]{8,12}|flipkart\.com\/p\/[^\s)]+|myntra\.com\/[^\s)]+|ajio\.com\/[^\s)]+)/ig;
+    const seen = new Set<string>();
+    let m: RegExpExecArray | null;
+    let count = 0;
+    while ((m = salvageRegex.exec(content)) && count < Math.max(3, limit)) {
+      let built = m[0];
+      if (!/^https?:\/\//i.test(built)) built = `https://${built.startsWith('www.') ? built : 'www.' + built}`;
+      built = cleanUrl(built);
+      if (seen.has(built)) continue;
+      seen.add(built);
+      const r = detectRetailer(built, retailerDomains);
+      const conf = validateRetailerUrl(built, r);
+      if (conf >= 0.3) {
+        results.push({
+          id: generateId(built),
+          title: built,
+          url: built,
+          retailer: r,
+          timestamp: Date.now(),
+          confidence: conf,
+        } as any);
+        count++;
+      }
+    }
+    console.log(`Salvage added ${count} results`);
+  }
+
   // Sort by confidence score (higher is better)
   results.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
   
