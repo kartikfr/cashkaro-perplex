@@ -96,14 +96,17 @@ serve(async (req) => {
 
     const data = await response.json();
     console.log('Perplexity response received');
+    console.log('Response content preview:', data.choices?.[0]?.message?.content?.substring(0, 500));
 
     // Parse and validate search results
     let results = await parseAndValidateResults(data, retailer, limit, retailerDomains);
     
     console.log(`Parsed ${results.length} initial results`);
     
-    // Follow redirects for top results to ensure correct landing pages
-    results = await followRedirectsForTopResults(results, 3);
+    // If we have results, follow redirects for top results
+    if (results.length > 0) {
+      results = await followRedirectsForTopResults(results, Math.min(3, results.length));
+    }
     
     console.log(`Returning ${results.length} validated results`);
 
@@ -185,15 +188,18 @@ async function parseAndValidateResults(data: any, retailer: string, limit: numbe
     const lines = content.split('\n').filter((line: string) => line.trim());
     let currentProduct: Partial<SearchResult> = {};
     
+    console.log(`Processing ${lines.length} lines from Perplexity response`);
+    
     for (const line of lines) {
       const trimmedLine = line.trim();
       
-      // Look for product titles (numbered list)
-      if (trimmedLine.match(/^\d+\./) && trimmedLine.length > 10) {
-        // Save previous product if complete
+      // Look for product titles (numbered list or bullet points)
+      if ((trimmedLine.match(/^\d+\./) || trimmedLine.match(/^[-*•]\s/)) && trimmedLine.length > 10) {
+        // Save previous product if it has at least a title and URL
         if (currentProduct.title && currentProduct.url) {
+          console.log(`Found product: ${currentProduct.title} - ${currentProduct.url}`);
           results.push(finalizeProduct(currentProduct));
-          if (results.length >= limit) break;
+          if (results.length >= limit * 2) break; // Get more candidates
         }
         
         // Start new product
@@ -210,19 +216,31 @@ async function parseAndValidateResults(data: any, retailer: string, limit: numbe
         trimmedLine.includes('myntra.com') || 
         trimmedLine.includes('ajio.com')
       )) {
-      const urlMatch = trimmedLine.match(/(https?:\/\/[^\s]+)/);
+      // Look for URLs
+      if (trimmedLine.includes('http') && (
+        trimmedLine.includes('amazon.in') || 
+        trimmedLine.includes('flipkart.com') || 
+        trimmedLine.includes('myntra.com') || 
+        trimmedLine.includes('ajio.com')
+      )) {
+        const urlMatch = trimmedLine.match(/(https?:\/\/[^\s]+)/);
         if (urlMatch) {
           const cleanedUrl = cleanUrl(urlMatch[1]);
           const detectedRetailer = detectRetailer(cleanedUrl, retailerDomains);
           const confidence = validateRetailerUrl(cleanedUrl, detectedRetailer);
           
-          // Only accept URLs with confidence >= 0.5
-          if (confidence >= 0.5) {
+          console.log(`URL found: ${cleanedUrl} (retailer: ${detectedRetailer}, confidence: ${confidence})`);
+          
+          // Accept URLs with confidence >= 0.3 (lowered threshold)
+          if (confidence >= 0.3) {
             currentProduct.url = cleanedUrl;
             currentProduct.retailer = detectedRetailer;
             currentProduct.confidence = confidence;
+          } else {
+            console.log(`URL rejected due to low confidence: ${confidence}`);
           }
         }
+      }
       }
       
       // Look for prices
@@ -241,9 +259,12 @@ async function parseAndValidateResults(data: any, retailer: string, limit: numbe
     }
     
     // Don't forget the last product
-    if (currentProduct.title && currentProduct.url && results.length < limit) {
+    if (currentProduct.title && currentProduct.url && results.length < limit * 2) {
+      console.log(`Found product: ${currentProduct.title} - ${currentProduct.url}`);
       results.push(finalizeProduct(currentProduct));
     }
+    
+    console.log(`Total products parsed: ${results.length}`);
     
   } catch (error) {
     console.error('Error parsing search results:', error);
@@ -251,6 +272,8 @@ async function parseAndValidateResults(data: any, retailer: string, limit: numbe
   
   // Sort by confidence score (higher is better)
   results.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+  
+  console.log(`Returning ${results.length} results after sorting`);
   
   return results.slice(0, limit * 2); // Return more candidates for redirect checking
 }
@@ -261,51 +284,58 @@ function validateRetailerUrl(url: string, retailer: string): number {
     const urlObj = new URL(url);
     const pathname = urlObj.pathname.toLowerCase();
     
+    console.log(`Validating ${retailer} URL: ${pathname}`);
+    
     switch (retailer) {
       case 'amazon':
         // Must have /dp/ or /gp/product/ with ASIN
         if (pathname.match(/\/(dp|gp\/product)\/[A-Z0-9]{10}/i)) return 1.0;
-        if (pathname.includes('/dp/') || pathname.includes('/gp/product/')) return 0.7;
-        return 0.3;
+        if (pathname.includes('/dp/') || pathname.includes('/gp/product/')) return 0.8;
+        return 0.4; // Be more lenient
         
       case 'flipkart':
         // Must have /p/ for product pages
         if (pathname.match(/\/p\/[^\/]+\/p\/itm[a-z0-9]+/i)) return 1.0;
-        if (pathname.startsWith('/p/')) return 0.8;
-        if (pathname.includes('/search') || pathname.includes('/category')) return 0.1;
-        return 0.5;
+        if (pathname.startsWith('/p/')) return 0.9;
+        if (pathname.includes('/search') || pathname.includes('/category')) return 0.2;
+        return 0.5; // Accept by default
         
       case 'myntra':
         // Must have /[productId]/buy format
         if (pathname.match(/\/\d+\/buy/)) return 1.0;
-        if (pathname.match(/\/\d+$/)) return 0.8;
-        if (pathname.includes('/shop/')) return 0.2;
-        return 0.5;
+        if (pathname.match(/\/\d+$/)) return 0.9;
+        if (pathname.includes('/shop/')) return 0.3;
+        return 0.6; // Be more lenient
         
       case 'ajio':
         // Must have /p/ for product pages
         if (pathname.startsWith('/p/')) return 1.0;
-        if (pathname.includes('/s/') || pathname.includes('/shop/')) return 0.2;
-        return 0.5;
+        if (pathname.includes('/s/') || pathname.includes('/shop/')) return 0.3;
+        return 0.6; // Be more lenient
         
       default:
         return 0.5;
     }
-  } catch {
+  } catch (error) {
+    console.error('Error validating URL:', error);
     return 0.0;
   }
 }
 
 // Follow redirects for top N results to ensure correct landing pages
 async function followRedirectsForTopResults(results: SearchResult[], topN: number): Promise<SearchResult[]> {
+  if (results.length === 0) return results;
+  
   const topResults = results.slice(0, topN);
   const restResults = results.slice(topN);
+  
+  console.log(`Checking redirects for top ${topResults.length} results`);
   
   const validatedTop = await Promise.all(
     topResults.map(async (result) => {
       try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 2000);
+        const timeout = setTimeout(() => controller.abort(), 3000); // Increased timeout
         
         const response = await fetch(result.url, {
           method: 'HEAD',
@@ -330,21 +360,23 @@ async function followRedirectsForTopResults(results: SearchResult[], topN: numbe
           });
           const confidence = validateRetailerUrl(finalUrl, finalRetailer);
           
-          if (confidence >= 0.5) {
+          if (confidence >= 0.3) {
             return { ...result, url: finalUrl, retailer: finalRetailer, confidence };
           }
         }
         
         return result;
       } catch (error) {
-        console.log(`Failed to check redirect for ${result.url}:`, error);
+        console.log(`Could not check redirect for ${result.url}, keeping original`);
         return result;
       }
     })
   );
   
   // Filter out invalid results after redirect checking
-  const validResults = validatedTop.filter(r => (r.confidence || 0) >= 0.5);
+  const validResults = validatedTop.filter(r => (r.confidence || 0) >= 0.3);
+  
+  console.log(`After redirect check: ${validResults.length} valid results`);
   
   return [...validResults, ...restResults].slice(0, 5);
 }
