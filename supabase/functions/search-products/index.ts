@@ -22,6 +22,7 @@ interface SearchResult {
   image?: string;
   retailer: string;
   timestamp: number;
+  confidence?: number; // URL validation confidence score
 }
 
 serve(async (req) => {
@@ -50,9 +51,11 @@ serve(async (req) => {
       ajio: 'ajio.com'
     };
 
-    // Build search prompt
+    // Build search prompt with stricter instructions
     const searchPrompt = buildSearchPrompt(query, retailer, retailerDomains);
     const domainFilter = getDomainFilter(retailer, retailerDomains);
+
+    console.log('Search prompt:', searchPrompt);
 
     // Call Perplexity API
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
@@ -66,7 +69,7 @@ serve(async (req) => {
         messages: [
           {
             role: 'system',
-            content: 'You are a product search assistant for Indian e-commerce. Return product information in a structured format with title, URL, price (in ₹ if available), and brief description. Focus on Indian e-commerce sites. Format your response as a clear numbered list with each product on separate lines.'
+            content: 'You are a product search assistant for Indian e-commerce. CRITICAL: Return ONLY direct product detail page URLs (Amazon: /dp/ASIN format, Flipkart: /p/ pages, Myntra: /[productId]/buy, AJIO: /p/ pages). Never return category pages, search result pages, or collection pages. Return product information in a structured format with title, direct product URL, price (in ₹ if available), and brief description. Format your response as a clear numbered list.'
           },
           {
             role: 'user',
@@ -94,10 +97,15 @@ serve(async (req) => {
     const data = await response.json();
     console.log('Perplexity response received');
 
-    // Parse search results
-    const results = parseSearchResults(data, retailer, limit, retailerDomains);
+    // Parse and validate search results
+    let results = await parseAndValidateResults(data, retailer, limit, retailerDomains);
     
-    console.log(`Returning ${results.length} results`);
+    console.log(`Parsed ${results.length} initial results`);
+    
+    // Follow redirects for top results to ensure correct landing pages
+    results = await followRedirectsForTopResults(results, 3);
+    
+    console.log(`Returning ${results.length} validated results`);
 
     return new Response(
       JSON.stringify({ results, query, retailer }),
@@ -133,11 +141,27 @@ function buildSearchPrompt(query: string, retailer: string, retailerDomains: Rec
   const sanitizedQuery = query.trim();
   
   if (retailer === 'all') {
-    return `Find "${sanitizedQuery}" products on Indian e-commerce websites (Amazon.in, Flipkart, Myntra, AJIO). For each product, provide: 1) Product title, 2) Direct product URL, 3) Price in rupees if available, 4) Brief description. Format as a numbered list with clear product entries.`;
+    return `Find "${sanitizedQuery}" products on Indian e-commerce websites. IMPORTANT: Provide ONLY direct product detail page URLs:
+- Amazon: Use /dp/ASIN format only (e.g., amazon.in/dp/B08X123)
+- Flipkart: Use /p/ product pages only
+- Myntra: Use /[productId]/buy format only
+- AJIO: Use /p/ product pages only
+For each product provide: 1) Product title, 2) Direct product page URL, 3) Price in ₹, 4) Brief description. Format as numbered list.`;
   }
   
   const domainFilter = retailerDomains[retailer as keyof typeof retailerDomains];
-  return `Find "${sanitizedQuery}" products specifically on ${domainFilter}. For each product, provide: 1) Product title, 2) Direct product URL, 3) Price in rupees if available, 4) Brief description. Format as a numbered list with clear product entries.`;
+  const retailerInstructions = getRetailerSpecificInstructions(retailer);
+  return `Find "${sanitizedQuery}" products on ${domainFilter}. ${retailerInstructions} For each product provide: 1) Product title, 2) Direct product page URL, 3) Price in ₹, 4) Brief description. Format as numbered list.`;
+}
+
+function getRetailerSpecificInstructions(retailer: string): string {
+  const instructions: Record<string, string> = {
+    amazon: 'Return ONLY URLs in /dp/ASIN format (e.g., amazon.in/dp/B08X123ABC).',
+    flipkart: 'Return ONLY /p/ product detail page URLs, not search or category pages.',
+    myntra: 'Return ONLY /[productId]/buy product page URLs.',
+    ajio: 'Return ONLY /p/ product detail page URLs.'
+  };
+  return instructions[retailer] || 'Return only direct product page URLs.';
 }
 
 function getDomainFilter(retailer: string, retailerDomains: Record<string, string>): string[] {
@@ -149,7 +173,7 @@ function getDomainFilter(retailer: string, retailerDomains: Record<string, strin
   return domain ? [domain] : Object.values(retailerDomains);
 }
 
-function parseSearchResults(data: any, retailer: string, limit: number, retailerDomains: Record<string, string>): SearchResult[] {
+async function parseAndValidateResults(data: any, retailer: string, limit: number, retailerDomains: Record<string, string>): Promise<SearchResult[]> {
   if (!data.choices || data.choices.length === 0) {
     return [];
   }
@@ -186,10 +210,18 @@ function parseSearchResults(data: any, retailer: string, limit: number, retailer
         trimmedLine.includes('myntra.com') || 
         trimmedLine.includes('ajio.com')
       )) {
-        const urlMatch = trimmedLine.match(/(https?:\/\/[^\s]+)/);
+      const urlMatch = trimmedLine.match(/(https?:\/\/[^\s]+)/);
         if (urlMatch) {
-          currentProduct.url = cleanUrl(urlMatch[1]);
-          currentProduct.retailer = detectRetailer(currentProduct.url, retailerDomains);
+          const cleanedUrl = cleanUrl(urlMatch[1]);
+          const detectedRetailer = detectRetailer(cleanedUrl, retailerDomains);
+          const confidence = validateRetailerUrl(cleanedUrl, detectedRetailer);
+          
+          // Only accept URLs with confidence >= 0.5
+          if (confidence >= 0.5) {
+            currentProduct.url = cleanedUrl;
+            currentProduct.retailer = detectedRetailer;
+            currentProduct.confidence = confidence;
+          }
         }
       }
       
@@ -217,7 +249,104 @@ function parseSearchResults(data: any, retailer: string, limit: number, retailer
     console.error('Error parsing search results:', error);
   }
   
-  return results.slice(0, limit);
+  // Sort by confidence score (higher is better)
+  results.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+  
+  return results.slice(0, limit * 2); // Return more candidates for redirect checking
+}
+
+// Validate and score URL patterns for each retailer
+function validateRetailerUrl(url: string, retailer: string): number {
+  try {
+    const urlObj = new URL(url);
+    const pathname = urlObj.pathname.toLowerCase();
+    
+    switch (retailer) {
+      case 'amazon':
+        // Must have /dp/ or /gp/product/ with ASIN
+        if (pathname.match(/\/(dp|gp\/product)\/[A-Z0-9]{10}/i)) return 1.0;
+        if (pathname.includes('/dp/') || pathname.includes('/gp/product/')) return 0.7;
+        return 0.3;
+        
+      case 'flipkart':
+        // Must have /p/ for product pages
+        if (pathname.match(/\/p\/[^\/]+\/p\/itm[a-z0-9]+/i)) return 1.0;
+        if (pathname.startsWith('/p/')) return 0.8;
+        if (pathname.includes('/search') || pathname.includes('/category')) return 0.1;
+        return 0.5;
+        
+      case 'myntra':
+        // Must have /[productId]/buy format
+        if (pathname.match(/\/\d+\/buy/)) return 1.0;
+        if (pathname.match(/\/\d+$/)) return 0.8;
+        if (pathname.includes('/shop/')) return 0.2;
+        return 0.5;
+        
+      case 'ajio':
+        // Must have /p/ for product pages
+        if (pathname.startsWith('/p/')) return 1.0;
+        if (pathname.includes('/s/') || pathname.includes('/shop/')) return 0.2;
+        return 0.5;
+        
+      default:
+        return 0.5;
+    }
+  } catch {
+    return 0.0;
+  }
+}
+
+// Follow redirects for top N results to ensure correct landing pages
+async function followRedirectsForTopResults(results: SearchResult[], topN: number): Promise<SearchResult[]> {
+  const topResults = results.slice(0, topN);
+  const restResults = results.slice(topN);
+  
+  const validatedTop = await Promise.all(
+    topResults.map(async (result) => {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 2000);
+        
+        const response = await fetch(result.url, {
+          method: 'HEAD',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          },
+          redirect: 'follow',
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeout);
+        
+        // Update URL if redirected
+        if (response.url && response.url !== result.url) {
+          console.log(`Redirect detected: ${result.url} -> ${response.url}`);
+          const finalUrl = cleanUrl(response.url);
+          const finalRetailer = detectRetailer(finalUrl, {
+            amazon: 'amazon.in',
+            flipkart: 'flipkart.com',
+            myntra: 'myntra.com',
+            ajio: 'ajio.com'
+          });
+          const confidence = validateRetailerUrl(finalUrl, finalRetailer);
+          
+          if (confidence >= 0.5) {
+            return { ...result, url: finalUrl, retailer: finalRetailer, confidence };
+          }
+        }
+        
+        return result;
+      } catch (error) {
+        console.log(`Failed to check redirect for ${result.url}:`, error);
+        return result;
+      }
+    })
+  );
+  
+  // Filter out invalid results after redirect checking
+  const validResults = validatedTop.filter(r => (r.confidence || 0) >= 0.5);
+  
+  return [...validResults, ...restResults].slice(0, 5);
 }
 
 function cleanTitle(title: string): string {

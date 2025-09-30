@@ -70,6 +70,9 @@ const SearchInterface: React.FC = () => {
   const [urlBuilder] = useState(new URLBuilder());
   const [useFallback, setUseFallback] = useState(false);
   const { toast } = useToast();
+  
+  // Request ID to prevent stale results
+  const requestIdRef = React.useRef(0);
 
   // API key is no longer needed since we use secure Edge Functions
   useEffect(() => {
@@ -89,6 +92,9 @@ const SearchInterface: React.FC = () => {
 
   // Real search function using Perplexity API with fallback
   const performSearch = async (query: string, retailer: string) => {
+    // Increment request ID to track this specific request
+    const currentRequestId = ++requestIdRef.current;
+    
     setIsLoading(true);
     setError(null);
     
@@ -102,19 +108,26 @@ const SearchInterface: React.FC = () => {
           filteredResults = SAMPLE_RESULTS.filter(result => result.retailer === retailer);
         }
         
-        setResults(filteredResults);
-        toast({
-          title: "Search Complete (Demo Mode)",
-          description: `Found ${filteredResults.length} sample products`,
-        });
+        // Only update if this is still the latest request
+        if (currentRequestId === requestIdRef.current) {
+          setResults(filteredResults);
+          toast({
+            title: "Search Complete (Demo Mode)",
+            description: `Found ${filteredResults.length} sample products`,
+          });
+        }
       } else {
         const searchResults = await searchService.search(query, retailer, 5);
-        setResults(searchResults);
         
-        toast({
-          title: "Search Complete",
-          description: `Found ${searchResults.length} products`,
-        });
+        // Only update if this is still the latest request
+        if (currentRequestId === requestIdRef.current) {
+          setResults(searchResults);
+          
+          toast({
+            title: "Search Complete",
+            description: `Found ${searchResults.length} products`,
+          });
+        }
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Search failed';
@@ -191,6 +204,8 @@ const SearchInterface: React.FC = () => {
   // Handle retailer change
   const handleRetailerChange = (retailer: string) => {
     setSelectedRetailer(retailer);
+    // Clear results immediately when switching retailers
+    setResults([]);
     if (searchQuery.trim()) {
       debouncedSearch(searchQuery, retailer);
     }
