@@ -14,7 +14,11 @@ interface CashKaroAuthStatus {
   timestamp?: string;
 }
 
-export const CashKaroStatus: React.FC = () => {
+interface CashKaroStatusProps {
+  refreshSignal?: number;
+}
+
+export const CashKaroStatus: React.FC<CashKaroStatusProps> = ({ refreshSignal }) => {
   const [authStatus, setAuthStatus] = useState<CashKaroAuthStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true); // Start with loading true
   const { toast } = useToast();
@@ -69,7 +73,8 @@ export const CashKaroStatus: React.FC = () => {
 
   useEffect(() => {
     checkAuthStatus();
-  }, []);
+    // Re-run when parent triggers a refresh
+  }, [refreshSignal]);
 
   const getStatusIcon = () => {
     if (isLoading) {
