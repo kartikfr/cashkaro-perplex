@@ -27,12 +27,10 @@ class URLBuilder {
       const url = new URL(this.normalizeRetailerUrl(validatedInput.productUrl));
       
       const hostname = url.hostname.toLowerCase();
-      // Special handling for Amazon: return clean canonical product URL without any query params
+      // Special handling for Amazon: return original URL (only trim stray trailing ')')
       if (hostname.includes('amazon')) {
-        url.search = '';
-        url.hash = '';
-        url.pathname = this.canonicalizeAmazonPath(url.pathname);
-        return url.toString();
+        const original = validatedInput.productUrl.trim().replace(/[)]+$/, '');
+        return original;
       }
       
       // For other retailers, attach CashKaro params then clean
@@ -53,6 +51,27 @@ class URLBuilder {
       console.error('URL building error:', error);
       // Always return a valid string, never a Promise
       return this.normalizeRetailerUrl(validatedInput.productUrl);
+    }
+  }
+
+  /**
+   * Build an Amazon search URL from a free-text query (e.g., product title)
+   */
+  public buildAmazonSearchUrl(query: string): string {
+    try {
+      const normalized = (query || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\*/g, '')
+        .replace(/["'`]/g, '')
+        .replace(/\s{2,}/g, ' ');
+
+      // Amazon commonly accepts "+" as space in s?k param; keep it readable
+      const encoded = encodeURIComponent(normalized).replace(/%20/g, '+');
+      // Keep it simple and stable; Amazon will enrich params on their side
+      return `https://www.amazon.in/s?k=${encoded}&ref=nb_sb_noss_2`;
+    } catch {
+      return 'https://www.amazon.in/s';
     }
   }
 
@@ -145,13 +164,12 @@ class URLBuilder {
       const sanitized = url.trim().replace(/[)\]\. ,]+$/g, '');
       const urlObj = new URL(sanitized);
       
-      // Amazon normalization
+      // Amazon normalization - preserve original URL structure
       if (urlObj.hostname.includes('amazon')) {
         urlObj.hostname = 'www.amazon.in';
-        // Ensure clean canonical product path, no query/hash
-        urlObj.search = '';
-        urlObj.hash = '';
-        urlObj.pathname = this.canonicalizeAmazonPath(urlObj.pathname);
+        // Keep original path structure, only clean trailing punctuation
+        urlObj.pathname = urlObj.pathname.replace(/[)]+$/, '');
+        // Don't modify search params or hash here - let buildFinalUrl handle it
       }
       
       // Flipkart normalization
@@ -190,18 +208,31 @@ class URLBuilder {
    */
   private canonicalizeAmazonPath(pathname: string): string {
     try {
-      // Handle /dp/ASIN or /gp/product/ASIN
-      const match = pathname.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/i);
-      if (match) {
-        return `/dp/${match[1].toUpperCase()}`;
-      }
-      // Also handle cases with trailing ')' or extra segments
-      const asinMatch = pathname.match(/\/([A-Z0-9]{10})(?:[/?).]|$)/i);
+      // Enhanced ASIN extraction patterns
+      const asinMatch =
+        // Standard /dp/ASIN format
+        pathname.match(/\/dp\/([A-Z0-9]{10})/i) ||
+        // /gp/product/ASIN format
+        pathname.match(/\/gp\/product\/([A-Z0-9]{10})/i) ||
+        // Complex paths like /Sony-inches-BRAVIA-Google-K-43S22BM2/dp/B0F7X29WXX/
+        pathname.match(/\/dp\/([A-Z0-9]{10})/i) ||
+        // ASIN anywhere in path
+        pathname.match(/\/([A-Z0-9]{10})(?:[/?).]|$)/i) ||
+        // Extract any 10-character alphanumeric string (ASIN pattern)
+        pathname.match(/([A-Z0-9]{10})/i);
+
       if (asinMatch) {
-        return `/dp/${asinMatch[1].toUpperCase()}`;
+        const asin = asinMatch[1].toUpperCase();
+        console.log(`Amazon ASIN extracted: ${asin} from path: ${pathname}`);
+        return `/dp/${asin}`;
       }
-      return pathname.replace(/[)]+$/, '');
-    } catch {
+      
+      // If no ASIN found, clean the path
+      const cleanedPath = pathname.replace(/[)]+$/, '').split('?')[0];
+      console.log(`Amazon path cleaned (no ASIN): ${pathname} -> ${cleanedPath}`);
+      return cleanedPath;
+    } catch (error) {
+      console.error('Error canonicalizing Amazon path:', error);
       return pathname;
     }
   }

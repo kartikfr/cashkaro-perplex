@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import HeaderWithSettings from '@/components/HeaderWithSettings';
 import HeroSection from '@/components/HeroSection';
+import CashKaroBenefits from '@/components/CashKaroBenefits';
 import SearchInterface from '@/components/SearchInterface';
 import SearchService from '@/lib/searchService';
 
@@ -22,14 +23,17 @@ const Index = () => {
       />
       <HeroSection />
       
+      {/* CashKaro Benefits Section */}
+      <CashKaroBenefits />
+      
       {/* Search Section */}
       <main id="search-section" className="container mx-auto px-6 py-16">
         <div className="text-center mb-12">
           <h2 className="text-3xl font-bold mb-4">
-            Search Products & Earn Cashback
+            Start Your CashKaro Shopping Journey
           </h2>
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-            Find the best deals across top Indian retailers with automatic CashKaro tracking
+            Search across Amazon, Flipkart, Myntra & AJIO - get instant cashback links without the usual 5-step process
           </p>
         </div>
         

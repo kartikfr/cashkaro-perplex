@@ -66,7 +66,7 @@ serve(async (req) => {
         messages: [
           {
             role: 'system',
-            content: 'You are a product search assistant for Indian e-commerce. Return product information in a structured format with title, FULL ORIGINAL URL (not shortened), price (in ₹ if available), image URL, and brief description. IMPORTANT: For Amazon URLs, provide the complete URL with product name in the path (e.g., https://www.amazon.in/Product-Name-Details/dp/ASIN/), NOT the shortened /dp/ASIN format. Include the main product image URL for each item. Focus on Indian e-commerce sites. Format your response as a clear numbered list with each product on separate lines.'
+            content: 'You are a product search assistant for Indian e-commerce. Return product information in a structured format with title, URL, price (in ₹ if available), image URL, and brief description. Include the main product image URL for each item. Focus on Indian e-commerce sites. Format your response as a clear numbered list with each product on separate lines.'
           },
           {
             role: 'user',
@@ -134,11 +134,11 @@ function buildSearchPrompt(query: string, retailer: string, retailerDomains: Rec
   const sanitizedQuery = query.trim();
   
   if (retailer === 'all') {
-    return `Find "${sanitizedQuery}" products on Indian e-commerce websites (Amazon.in, Flipkart, Myntra, AJIO). For each product, provide: 1) Product title, 2) COMPLETE ORIGINAL URL with product name in path (NOT shortened URLs like /dp/ASIN), 3) Price in rupees if available, 4) Brief description. IMPORTANT: For Amazon, use full URLs like https://www.amazon.in/Product-Name-Details/dp/ASIN/ instead of https://www.amazon.in/dp/ASIN. Format as a numbered list with clear product entries.`;
+    return `Find "${sanitizedQuery}" products on Indian e-commerce websites (Amazon.in, Flipkart, Myntra, AJIO). For each product, provide: 1) Product title, 2) Direct product URL, 3) Price in rupees if available, 4) Brief description. Format as a numbered list with clear product entries.`;
   }
   
   const domainFilter = retailerDomains[retailer as keyof typeof retailerDomains];
-  return `Find "${sanitizedQuery}" products specifically on ${domainFilter}. For each product, provide: 1) Product title, 2) COMPLETE ORIGINAL URL with product name in path (NOT shortened URLs), 3) Price in rupees if available, 4) Brief description. IMPORTANT: For Amazon, use full URLs like https://www.amazon.in/Product-Name-Details/dp/ASIN/ instead of https://www.amazon.in/dp/ASIN. Format as a numbered list with clear product entries.`;
+  return `Find "${sanitizedQuery}" products specifically on ${domainFilter}. For each product, provide: 1) Product title, 2) Direct product URL, 3) Price in rupees if available, 4) Brief description. Format as a numbered list with clear product entries.`;
 }
 
 function getDomainFilter(retailer: string, retailerDomains: Record<string, string>): string[] {
@@ -181,9 +181,7 @@ async function parseSearchResults(data: any, retailer: string, limit: number, re
             currentProduct.image = images[imageIndex].url;
             imageIndex++;
           }
-          // Always finalize product to ensure image is generated
-          const finalizedProduct = await finalizeProduct(currentProduct);
-          results.push(finalizedProduct);
+          results.push(await finalizeProduct(currentProduct));
           if (results.length >= limit) break;
         }
         
@@ -235,9 +233,7 @@ async function parseSearchResults(data: any, retailer: string, limit: number, re
       if (images[imageIndex]) {
         currentProduct.image = images[imageIndex].url;
       }
-      // Always finalize product to ensure image is generated
-      const finalizedProduct = await finalizeProduct(currentProduct);
-      results.push(finalizedProduct);
+      results.push(await finalizeProduct(currentProduct));
     }
     
   } catch (error) {
@@ -261,11 +257,22 @@ function cleanUrl(url: string): string {
     const sanitized = url.trim().replace(/[)\]>,\.;]+$/g, '');
     const urlObj = new URL(sanitized);
 
-    // For Amazon URLs - return original URL (only trim stray trailing characters)
+    // Canonicalize Amazon product URLs to https://www.amazon.in/dp/ASIN with no params/hash
     if (urlObj.hostname.includes('amazon')) {
-      const original = sanitized.replace(/[)]+$/, '');
-      console.log(`Amazon URL (original preserved): ${url} -> ${original}`);
-      return original;
+      urlObj.hostname = 'www.amazon.in';
+
+      // Extract ASIN from various Amazon URL formats
+      const asinMatch =
+        urlObj.pathname.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/i) ||
+        urlObj.pathname.match(/\/([A-Z0-9]{10})(?:[/?]|$)/i);
+
+      const asin = asinMatch ? asinMatch[1].toUpperCase() : null;
+
+      urlObj.search = '';
+      urlObj.hash = '';
+      urlObj.pathname = asin ? `/dp/${asin}` : urlObj.pathname.replace(/[)]+$/, '');
+
+      return urlObj.toString();
     }
 
     // For other retailers, keep only essential params
@@ -280,8 +287,7 @@ function cleanUrl(url: string): string {
 
     urlObj.search = newSearchParams.toString();
     return urlObj.toString();
-  } catch (error) {
-    console.error('Error cleaning URL:', error);
+  } catch {
     return url;
   }
 }
@@ -303,51 +309,31 @@ function detectRetailer(url: string, retailerDomains: Record<string, string>): s
 }
 
 async function finalizeProduct(product: Partial<SearchResult>): Promise<SearchResult> {
-  // If no image from Perplexity, try web scraping
+  // If no image from Perplexity, try to extract using Python service
   let finalImage = product.image;
-  let finalImages: string[] = [];
-  let imageMethod = 'perplexity';
-  
   if (!finalImage && product.url) {
-    console.log('No image from Perplexity, trying web scraping for:', product.url);
+    console.log('No image from Perplexity, trying Python extraction for:', product.url);
     try {
-      const scrapeResult = await scrapeProductImages(product.url, product.retailer);
-      if (scrapeResult.success && scrapeResult.images.length > 0) {
-        finalImages = scrapeResult.images;
-        finalImage = scrapeResult.images[0];
-        imageMethod = scrapeResult.method;
-        console.log('Web scraping successful:', finalImage);
-        
-        // Update title and price if found
-        if (scrapeResult.title && !product.title) {
-          product.title = scrapeResult.title;
-        }
-        if (scrapeResult.price && !product.price) {
-          product.price = scrapeResult.price;
-        }
+      const imageResult = await extractImagesFromPythonService(product.url, product.retailer);
+      if (imageResult.success && imageResult.images.length > 0) {
+        finalImage = imageResult.images[0];
+        console.log('Python extraction successful:', finalImage);
       }
     } catch (error) {
-      console.warn('Web scraping failed, trying fallback:', error);
+      console.warn('Python extraction failed, trying fallback:', error);
     }
   }
 
-  // Fallback to URL pattern generation
+  // Fallback to URL-based generation
   if (!finalImage && product.url) {
-    console.log('No image from scraping, generating from URL:', product.url);
+    console.log('No image from Python service, generating from URL:', product.url);
     finalImage = generateImageFromUrl(product.url);
-    if (finalImage) {
-      finalImages = [finalImage];
-      imageMethod = 'url_pattern';
-      console.log('URL pattern generation successful:', finalImage);
-    }
   }
 
   // If still no image, use a generic placeholder
   if (!finalImage) {
     console.log('No image generated, using generic placeholder for retailer:', product.retailer);
     finalImage = generateGenericPlaceholder(product.retailer || 'unknown');
-    finalImages = [finalImage];
-    imageMethod = 'placeholder';
   }
 
   const finalProduct = {
@@ -357,60 +343,12 @@ async function finalizeProduct(product: Partial<SearchResult>): Promise<SearchRe
     snippet: product.snippet,
     price: product.price,
     image: finalImage,
-    images: finalImages.length > 0 ? finalImages : [finalImage],
     retailer: product.retailer || 'unknown',
-    timestamp: product.timestamp || Date.now(),
-    image_method: imageMethod,
-    image_quality: imageMethod === 'perplexity' ? 'high' : 
-                  imageMethod === 'web_scraping' ? 'high' :
-                  imageMethod === 'pattern_fallback' ? 'medium' :
-                  imageMethod === 'url_pattern' ? 'medium' :
-                  imageMethod === 'placeholder' ? 'placeholder' : 'low'
+    timestamp: product.timestamp || Date.now()
   };
 
   console.log('Finalized product:', finalProduct);
   return finalProduct;
-}
-
-// Web scraping service integration
-async function scrapeProductImages(url: string, retailer?: string): Promise<{success: boolean, images: string[], method: string, title?: string, price?: string}> {
-  try {
-    console.log('Calling web scraping service for:', url);
-    
-    const response = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/scrape-product-images`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        url,
-        retailer
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Scraping service error: ${response.status}`);
-    }
-
-    const result = await response.json();
-    console.log('Scraping service response:', result);
-    
-    return {
-      success: result.success,
-      images: result.images || [],
-      method: result.method || 'web_scraping',
-      title: result.title,
-      price: result.price
-    };
-  } catch (error) {
-    console.error('Web scraping failed:', error);
-    return {
-      success: false,
-      images: [],
-      method: 'scraping_failed'
-    };
-  }
 }
 
 // Python image extraction service integration
@@ -451,59 +389,47 @@ async function extractImagesFromPythonService(url: string, retailer?: string): P
 }
 
 function generateGenericPlaceholder(retailer: string): string {
-  // Use actual retailer logos as fallbacks
-  const retailerLogos: Record<string, string> = {
-    amazon: '/Amazon Logo.webp',
-    flipkart: '/flipkart-logo-icon-hd-png-701751694706828v1habfry9b.png',
-    myntra: '/myntra-logo-myntra-icon-transparent-background-free-png.webp',
-    ajio: '/ajio-logo-app-icon-hd.webp',
-    nykaa: 'https://via.placeholder.com/300x300/FF1493/FFFFFF?text=NYKAA',
-    tatacliq: 'https://via.placeholder.com/300x300/000000/FFFFFF?text=TATACLIQ',
-    unknown: 'https://via.placeholder.com/300x300/6B7280/FFFFFF?text=PRODUCT'
+  const retailerColors: Record<string, string> = {
+    amazon: 'FF9900',
+    flipkart: '2874F0',
+    myntra: 'FF3F6C',
+    ajio: 'FF6B35',
+    nykaa: 'FF1493',
+    tatacliq: '000000',
+    unknown: '6B7280'
   };
   
-  const logoUrl = retailerLogos[retailer.toLowerCase()] || retailerLogos.unknown;
-  console.log(`Generated placeholder for ${retailer}: ${logoUrl}`);
-  return logoUrl;
+  const color = retailerColors[retailer] || '6B7280';
+  return `https://via.placeholder.com/300x300/${color}/FFFFFF?text=${retailer.toUpperCase()}`;
 }
 
 function generateImageFromUrl(url: string): string | undefined {
   try {
     console.log('Generating image from URL:', url);
+    const urlObj = new URL(url);
     
-    // Amazon image patterns - optimized for performance
-    if (url.includes('amazon')) {
-      // Try different ASIN patterns
-      const asinPatterns = [
-        /\/dp\/([A-Z0-9]{10})/,  // Standard pattern
-        /\/dp\/([A-Z0-9]{9})/,   // 9-character ASIN
-        /\/dp\/([A-Z0-9]{11})/,  // 11-character ASIN
-        /\/dp\/([A-Z0-9]+)/      // Any ASIN pattern
-      ];
-      
-      for (const pattern of asinPatterns) {
-        const asinMatch = url.match(pattern);
-        if (asinMatch) {
-          const asin = asinMatch[1];
-          const imageUrl = `https://images-na.ssl-images-amazon.com/images/P/${asin}.01.L.jpg`;
-          console.log('Generated Amazon image URL:', imageUrl);
-          return imageUrl;
-        }
+    // Amazon image patterns
+    if (urlObj.hostname.includes('amazon')) {
+      const asinMatch = url.match(/\/dp\/([A-Z0-9]{10})/);
+      if (asinMatch) {
+        const imageUrl = `https://images-na.ssl-images-amazon.com/images/P/${asinMatch[1]}.01.L.jpg`;
+        console.log('Generated Amazon image URL:', imageUrl);
+        return imageUrl;
       }
     }
     
     // Flipkart image patterns
-    if (url.includes('flipkart')) {
+    if (urlObj.hostname.includes('flipkart')) {
       const pidMatch = url.match(/pid=([^&]+)/);
       if (pidMatch) {
-        const imageUrl = `https://rukminim1.flixcart.com/image/832/832/product/${pidMatch[1]}.jpeg`;
+        const imageUrl = `https://rukminim1.flixcart.com/image/416/416/product/${pidMatch[1]}.jpeg`;
         console.log('Generated Flipkart image URL:', imageUrl);
         return imageUrl;
       }
     }
     
     // Myntra image patterns - Enhanced to handle more URL formats
-    if (url.includes('myntra')) {
+    if (urlObj.hostname.includes('myntra')) {
       // Try multiple patterns for Myntra
       const patterns = [
         /\/product\/([^\/]+)/,
@@ -524,31 +450,11 @@ function generateImageFromUrl(url: string): string | undefined {
     }
     
     // AJIO image patterns
-    if (url.includes('ajio')) {
+    if (urlObj.hostname.includes('ajio')) {
       const productIdMatch = url.match(/\/p\/([^\/]+)/);
       if (productIdMatch) {
         const imageUrl = `https://assets.ajio.com/images/${productIdMatch[1]}/1.jpg`;
         console.log('Generated AJIO image URL:', imageUrl);
-        return imageUrl;
-      }
-    }
-    
-    // Nykaa image patterns
-    if (url.includes('nykaa')) {
-      const productIdMatch = url.match(/\/p\/([^\/]+)/);
-      if (productIdMatch) {
-        const imageUrl = `https://images-static.nykaa.com/images/${productIdMatch[1]}/1.jpg`;
-        console.log('Generated Nykaa image URL:', imageUrl);
-        return imageUrl;
-      }
-    }
-    
-    // TataCliq image patterns
-    if (url.includes('tatacliq')) {
-      const productIdMatch = url.match(/\/p\/([^\/]+)/);
-      if (productIdMatch) {
-        const imageUrl = `https://img.tatacliq.com/images/${productIdMatch[1]}/1.jpg`;
-        console.log('Generated TataCliq image URL:', imageUrl);
         return imageUrl;
       }
     }

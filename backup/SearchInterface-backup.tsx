@@ -10,7 +10,6 @@ import SearchService, { SearchResult } from '@/lib/searchService';
 import URLBuilder from '@/lib/urlBuilder';
 import { optimizeImageUrl, isValidImageUrl, generatePlaceholderUrl } from '@/lib/imageUtils';
 import { performanceMonitor } from '@/lib/performanceMonitor';
-import { ImageErrorPopup } from '@/components/ImageErrorPopup';
 
 // No longer needed - API key is managed securely in Edge Functions
 
@@ -77,8 +76,6 @@ const SearchInterface: React.FC = () => {
   const [useFallback, setUseFallback] = useState(false);
   const [imageLoadingStates, setImageLoadingStates] = useState<Record<string, boolean>>({});
   const [imageErrors, setImageErrors] = useState<Record<string, boolean>>({});
-  const [showImageErrorPopup, setShowImageErrorPopup] = useState(false);
-  const [errorPopupData, setErrorPopupData] = useState<{productTitle?: string, retailer?: string}>({});
   const { toast } = useToast();
 
   // API key is no longer needed since we use secure Edge Functions
@@ -164,16 +161,15 @@ const SearchInterface: React.FC = () => {
     }
   };
 
-  // Handle product click - build proper CashKaro tracking URL
+  // Handle product click - open the exact product URL (no extra params)
   const handleProductClick = async (result: SearchResult) => {
     try {
       console.log('Handling product click for:', result.title);
-      console.log('Original URL:', result.url);
 
-      // Build final URL (Amazon preserved as original product detail page)
-      const finalUrl = await urlBuilder.buildFinalUrl(result.url, result.retailer);
+      // Normalize but do not append any tracking params
+      const finalUrl = urlBuilder.normalizeRetailerUrl(result.url);
 
-      console.log('Final CashKaro URL:', finalUrl);
+      console.log('Opening product URL:', finalUrl);
 
       toast({
         title: "Opening product",
@@ -183,14 +179,12 @@ const SearchInterface: React.FC = () => {
       window.open(finalUrl, '_blank');
 
     } catch (error) {
-      console.error('Error building CashKaro URL:', error);
-      // Fallback to normalized URL
-      const fallbackUrl = urlBuilder.normalizeRetailerUrl(result.url);
-      console.log('Using fallback URL:', fallbackUrl);
-      window.open(fallbackUrl, '_blank');
+      console.error('Error opening product URL:', error);
+      // Fallback to original URL
+      window.open(result.url, '_blank');
       toast({
         title: "Redirecting",
-        description: "Opened product link (fallback mode)",
+        description: "Opened original product link",
         variant: "destructive",
       });
     }
@@ -240,14 +234,10 @@ const SearchInterface: React.FC = () => {
     performanceMonitor.endImageLoad(productId);
   };
 
-  const handleImageError = (productId: string, productTitle?: string, retailer?: string) => {
+  const handleImageError = (productId: string) => {
     setImageLoadingStates(prev => ({ ...prev, [productId]: false }));
     setImageErrors(prev => ({ ...prev, [productId]: true }));
     performanceMonitor.recordImageError(productId);
-    
-    // Show error popup for image loading failures
-    setErrorPopupData({ productTitle, retailer });
-    setShowImageErrorPopup(true);
   };
 
   const handleImageStart = (productId: string) => {
@@ -255,9 +245,9 @@ const SearchInterface: React.FC = () => {
     performanceMonitor.startImageLoad(productId);
   };
 
-  // Get optimized image URL with fallback and validation
+  // Get optimized image URL with fallback
   const getOptimizedImageUrl = (result: SearchResult): string | null => {
-    console.log('Getting optimized image URL for product:', result.id, 'image:', result.image, 'quality:', result.image_quality, 'method:', result.image_method);
+    console.log('Getting optimized image URL for product:', result.id, 'image:', result.image, 'quality:', result.image_quality);
     
     // Try multiple image sources
     const imageSources = [
@@ -270,23 +260,17 @@ const SearchInterface: React.FC = () => {
       return null;
     }
     
-    // Select best image based on quality and method
+    // Select best image based on quality
     let selectedImage = imageSources[0];
     
-    // If we have multiple images, prefer based on quality
+    // If we have multiple images, prefer higher quality ones
     if (imageSources.length > 1) {
-      // Prioritize by image method
-      if (result.image_method === 'web_scraping') {
-        // Use the first scraped image (usually the best)
-        selectedImage = imageSources[0];
-      } else {
-        // Look for high-quality images first
-        const highQualityImages = imageSources.filter(img => 
-          img && (img.includes('amazon') || img.includes('myntra') || img.includes('flipkart') || img.includes('rukminim'))
-        );
-        if (highQualityImages.length > 0) {
-          selectedImage = highQualityImages[0];
-        }
+      // Look for high-quality images first
+      const highQualityImages = imageSources.filter(img => 
+        img && (img.includes('amazon') || img.includes('myntra') || img.includes('flipkart'))
+      );
+      if (highQualityImages.length > 0) {
+        selectedImage = highQualityImages[0];
       }
     }
     
@@ -298,25 +282,23 @@ const SearchInterface: React.FC = () => {
     
     // Optimize the image URL based on retailer
     const optimizedUrl = optimizeImageUrl(selectedImage, 144, 144);
-    console.log('Optimized image URL:', optimizedUrl, 'Quality:', result.image_quality, 'Method:', result.image_method);
+    console.log('Optimized image URL:', optimizedUrl, 'Quality:', result.image_quality);
     return optimizedUrl;
   };
 
-  // Get retailer-specific placeholder using actual logos
+  // Get retailer-specific placeholder
   const getRetailerPlaceholder = (retailer: string): string => {
-    const retailerLogos: Record<string, string> = {
-      amazon: '/Amazon Logo.webp',
-      flipkart: '/flipkart-logo-icon-hd-png-701751694706828v1habfry9b.png',
-      myntra: '/myntra-logo-myntra-icon-transparent-background-free-png.webp',
-      ajio: '/ajio-logo-app-icon-hd.webp',
-      nykaa: 'https://via.placeholder.com/144x144/FF1493/FFFFFF?text=NYKAA',
-      tatacliq: 'https://via.placeholder.com/144x144/000000/FFFFFF?text=TATACLIQ',
-      unknown: 'https://via.placeholder.com/144x144/6B7280/FFFFFF?text=PRODUCT'
+    const retailerColors: Record<string, string> = {
+      amazon: 'FF9900',
+      flipkart: '2874F0',
+      myntra: 'FF3F6C',
+      ajio: 'FF6B35',
+      nykaa: 'FF1493',
+      tatacliq: '000000'
     };
     
-    const logoUrl = retailerLogos[retailer.toLowerCase()] || retailerLogos.unknown;
-    console.log(`Using retailer logo for ${retailer}: ${logoUrl}`);
-    return logoUrl;
+    const color = retailerColors[retailer] || '6B7280';
+    return `https://via.placeholder.com/144x144/${color}/FFFFFF?text=${retailer.toUpperCase()}`;
   };
 
   return (
@@ -471,7 +453,7 @@ const SearchInterface: React.FC = () => {
                                 isPlaceholder ? 'opacity-75' : ''
                               }`}
                               onLoad={() => handleImageLoad(result.id)}
-                              onError={() => handleImageError(result.id, result.title, result.retailer)}
+                              onError={() => handleImageError(result.id)}
                               onLoadStart={() => handleImageStart(result.id)}
                               loading="lazy"
                               decoding="async"
@@ -490,20 +472,15 @@ const SearchInterface: React.FC = () => {
                             )}
                           </div>
                         ) : (
-                          <div className="w-20 h-20 sm:w-24 sm:h-24 md:w-32 md:h-32 lg:w-36 lg:h-36 rounded-lg overflow-hidden bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center relative">
+                          <div className="w-20 h-20 sm:w-24 sm:h-24 md:w-32 md:h-32 lg:w-36 lg:h-36 rounded-lg overflow-hidden bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center">
                             <img
                               src={getRetailerPlaceholder(result.retailer)}
-                              alt={`${result.retailer} logo`}
-                              className="w-12 h-12 sm:w-16 sm:h-16 md:w-20 md:h-20 lg:w-24 lg:h-24 object-contain opacity-80"
+                              alt={`${result.retailer} placeholder`}
+                              className="w-full h-full object-cover opacity-50"
                               loading="lazy"
-                              onError={() => {
-                                // If retailer logo fails, show generic icon
-                                const img = document.createElement('div');
-                                img.innerHTML = '<div class="w-6 h-6 sm:w-8 sm:h-8 text-gray-400"><svg fill="currentColor" viewBox="0 0 24 24"><path d="M7 4V2C7 1.45 7.45 1 8 1H16C16.55 1 17 1.45 17 2V4H20C20.55 4 21 4.45 21 5S20.55 6 20 6H19V19C19 20.1 18.1 21 17 21H7C5.9 21 5 20.1 5 19V6H4C3.45 6 3 5.55 3 5S3.45 4 4 4H7ZM9 3V4H15V3H9ZM7 6V19H17V6H7Z"/></svg></div>';
-                              }}
                             />
-                            <div className="absolute bottom-1 right-1">
-                              <ShoppingCart className="w-3 h-3 sm:w-4 sm:h-4 text-gray-400" />
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <ShoppingCart className="w-6 h-6 sm:w-8 sm:h-8 text-gray-400" />
                             </div>
                           </div>
                         );
@@ -592,21 +569,13 @@ const SearchInterface: React.FC = () => {
             <Zap className="w-5 h-5 text-primary" />
             <h3 className="font-semibold">How It Works</h3>
           </div>
-          <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
-            <li><strong className="text-foreground">Search Once:</strong> Find products across Amazon, Flipkart, Myntra & AJIO in one place using {useFallback ? 'demo data' : 'AI-powered search'}</li>
-            <li><strong className="text-foreground">Get CashKaro Links:</strong> Click any result to automatically get cashback-enabled links (skips the usual 5-step CashKaro process)</li>
-            <li><strong className="text-foreground">Shop & Earn:</strong> Complete your purchase and earn CashKaro cashback without any extra steps</li>
+          <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
+            <li>Search for products across major Indian retailers using {useFallback ? 'demo data' : 'Perplexity AI'}</li>
+            <li>Click any result to automatically get CashKaro cashback tracking</li>
+            <li>Shop normally and earn cashback without extra steps</li>
           </ol>
         </div>
       </Card>
-
-      {/* Image Error Popup */}
-      <ImageErrorPopup
-        isOpen={showImageErrorPopup}
-        onClose={() => setShowImageErrorPopup(false)}
-        productTitle={errorPopupData.productTitle}
-        retailer={errorPopupData.retailer}
-      />
     </div>
   );
 };
